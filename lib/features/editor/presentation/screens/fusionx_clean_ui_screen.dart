@@ -1,9 +1,16 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../../../core/media/device_media_library_bridge.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../engine/bridge/method_channel_fusionx_engine_bridge.dart';
+import '../../../../engine/contracts/engine_contracts.dart';
+import '../../../../engine/models/engine_time.dart';
+import '../models/device_media_item.dart';
 import '../models/editor_media_tab.dart';
 import '../models/mock_asset_item.dart';
 import '../models/timeline_mock_models.dart';
@@ -22,111 +29,673 @@ class FusionXCleanUiScreen extends StatefulWidget {
 }
 
 class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
-  static const double _projectWidth = 1080;
-  static const double _projectHeight = 1920;
-  static const double _fps = 30;
+  static const int _defaultProjectWidth = 1080;
+  static const int _defaultProjectHeight = 1920;
+  static const int _previewSurfaceWidth = 720;
+  static const int _previewSurfaceHeight = 1280;
+  static const int _minimumTrimUs = 250000;
+  static const String _primaryClipId = 'clip-primary';
+  static const List<EditorMediaTab> _mediaSheetTabs = <EditorMediaTab>[
+    EditorMediaTab.video,
+    EditorMediaTab.image,
+  ];
 
   late final ValueNotifier<List<MockAssetItem>> _assetLibrary;
+  final MethodChannelFusionXEngineBridge _engineBridge =
+      MethodChannelFusionXEngineBridge();
+  final DeviceMediaLibraryBridge _deviceMediaBridge =
+      DeviceMediaLibraryBridge();
+
+  StreamSubscription<FusionXEngineEvent>? _eventsSubscription;
+
   EditorMediaTab _activeTab = EditorMediaTab.video;
   List<TimelineTrackData> _tracks = const <TimelineTrackData>[];
-  String? _selectedClipId = 'clip-video-1';
-  double _currentSeconds = 0;
-  bool _isPlaying = false;
-  Timer? _playbackTimer;
+  String? _selectedClipId;
+  String? _selectedAssetId;
+  String _playbackStatus = FusionXTransportState.idle.name;
+  String? _lastError;
+  int? _textureId;
+  bool _renderTargetAttached = false;
+  bool _engineAvailable = true;
+  bool _firstFrameRendered = false;
+  bool _isTimelineScrubbing = false;
+  bool _showScrubPreviewOverlay = false;
+  int _projectWidth = _defaultProjectWidth;
+  int _projectHeight = _defaultProjectHeight;
+  int _sourceDurationUs = 0;
+  int _trimStartUs = 0;
+  int _trimEndUs = 0;
+  int _sourceTimeUs = 0;
+  int _timelineTimeUs = 0;
+  Map<EditorMediaTab, List<DeviceMediaItem>> _deviceMedia =
+      <EditorMediaTab, List<DeviceMediaItem>>{
+    EditorMediaTab.video: const <DeviceMediaItem>[],
+    EditorMediaTab.image: const <DeviceMediaItem>[],
+  };
+  Map<EditorMediaTab, bool> _deviceMediaLoading = <EditorMediaTab, bool>{
+    EditorMediaTab.video: false,
+    EditorMediaTab.image: false,
+  };
+  Map<EditorMediaTab, String?> _deviceMediaErrors = <EditorMediaTab, String?>{
+    EditorMediaTab.video: null,
+    EditorMediaTab.image: null,
+  };
+  final Map<String, Future<Uint8List?>> _thumbnailRequests =
+      <String, Future<Uint8List?>>{};
+  Uint8List? _scrubPreviewBytes;
 
-  @override
-  void initState() {
-    super.initState();
-    _assetLibrary = ValueNotifier<List<MockAssetItem>>(_buildInitialAssets());
-    _tracks = _buildInitialTracks();
-  }
+  bool get _isAndroidFoundationSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-  @override
-  void dispose() {
-    _playbackTimer?.cancel();
-    _assetLibrary.dispose();
-    super.dispose();
-  }
+  bool get _hasClip => _selectedAsset != null && _sourceDurationUs > 0;
 
-  double get _workspaceAspectRatio => _projectWidth / _projectHeight;
+  bool get _isPlaying => _playbackStatus == FusionXTransportState.playing.name;
 
-  double get _timelineDuration {
-    var maxDuration = 0.0;
-    for (final track in _tracks) {
-      var cursor = 0.0;
-      for (final clip in track.clips) {
-        cursor += clip.duration;
-      }
-      maxDuration = math.max(maxDuration, cursor);
+  double get _workspaceAspectRatio {
+    if (_projectHeight <= 0) {
+      return 9 / 16;
     }
-    return maxDuration <= 0 ? 14 : maxDuration;
+    return _projectWidth / _projectHeight;
   }
+
+  double get _currentSeconds => _timelineTimeUs / 1000000;
+
+  double get _timelineDuration => _hasClip
+      ? math.max(0.25, (_trimEndUs - _trimStartUs) / 1000000).toDouble()
+      : 12;
 
   MockAssetItem? get _selectedAsset {
-    final selectedClipId = _selectedClipId;
-    if (selectedClipId == null) {
-      return null;
-    }
-    String? assetId;
-    for (final track in _tracks) {
-      for (final clip in track.clips) {
-        if (clip.id == selectedClipId) {
-          assetId = clip.assetId;
-        }
-      }
-    }
-    if (assetId == null) {
+    final selectedAssetId = _selectedAssetId;
+    if (selectedAssetId == null) {
       return null;
     }
     for (final asset in _assetLibrary.value) {
-      if (asset.id == assetId) {
+      if (asset.id == selectedAssetId) {
         return asset;
       }
     }
     return null;
   }
 
-  void _togglePlayback() {
-    if (_isPlaying) {
-      _stopPlayback();
+  @override
+  void initState() {
+    super.initState();
+    _assetLibrary = ValueNotifier<List<MockAssetItem>>(const <MockAssetItem>[]);
+    _tracks = _buildPhaseOneTracks();
+    _eventsSubscription = _engineBridge.events.listen(_handleEngineEvent);
+    unawaited(_initializeFoundation());
+  }
+
+  @override
+  void dispose() {
+    _eventsSubscription?.cancel();
+    if (_renderTargetAttached) {
+      unawaited(
+        _engineBridge.dispatch(
+          const FusionXEngineCommand(
+            type: FusionXEngineCommandType.detachRenderTarget,
+          ),
+        ),
+      );
+    }
+    unawaited(_engineBridge.dispose());
+    _assetLibrary.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initializeFoundation() async {
+    if (!_isAndroidFoundationSupported) {
+      setState(() {
+        _engineAvailable = false;
+      });
       return;
     }
-    _isPlaying = true;
-    _playbackTimer?.cancel();
-    _playbackTimer = Timer.periodic(
-      Duration(milliseconds: (1000 / _fps).round()),
-      (_) {
-        if (!mounted) {
+
+    try {
+      await _engineBridge.initialize();
+      final result = await _engineBridge.attachRenderTarget(
+        width: _previewSurfaceWidth,
+        height: _previewSurfaceHeight,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _textureId = result.textureId;
+        _renderTargetAttached = result.textureId >= 0;
+      });
+      unawaited(_warmDeviceMediaLibraryIfPermitted());
+    } on MissingPluginException {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _engineAvailable = false;
+        _lastError = 'Native playback bridge is unavailable in this build.';
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _engineAvailable = false;
+        _lastError = error.message ?? 'Unable to attach the native preview.';
+      });
+    }
+  }
+
+  void _handleEngineEvent(FusionXEngineEvent event) {
+    if (!mounted) {
+      return;
+    }
+
+    switch (event.type) {
+      case FusionXEngineEventType.ready:
+        setState(() {
+          if (_playbackStatus == FusionXTransportState.idle.name) {
+            _playbackStatus = FusionXTransportState.ready.name;
+          }
+        });
+      case FusionXEngineEventType.durationResolved:
+        final sourceDurationUs =
+            (event.payload['sourceDurationUs'] as num?)?.toInt() ?? 0;
+        final trimStartUs =
+            (event.payload['trimStartUs'] as num?)?.toInt() ?? 0;
+        final trimEndUs =
+            (event.payload['trimEndUs'] as num?)?.toInt() ?? sourceDurationUs;
+        final sourceWidth =
+            (event.payload['sourceWidth'] as num?)?.toInt() ?? _projectWidth;
+        final sourceHeight =
+            (event.payload['sourceHeight'] as num?)?.toInt() ?? _projectHeight;
+        _updateSelectedAssetMetadata(
+          sourceDurationUs: sourceDurationUs,
+          sourceWidth: sourceWidth,
+          sourceHeight: sourceHeight,
+        );
+        setState(() {
+          _sourceDurationUs = sourceDurationUs;
+          _trimStartUs = trimStartUs;
+          _trimEndUs = trimEndUs;
+          _projectWidth = sourceWidth > 0 ? sourceWidth : _defaultProjectWidth;
+          _projectHeight =
+              sourceHeight > 0 ? sourceHeight : _defaultProjectHeight;
+          _tracks = _buildPhaseOneTracks();
+          _selectedClipId = _hasClip ? _primaryClipId : null;
+        });
+      case FusionXEngineEventType.positionChanged:
+        final sourceTimeUs =
+            (event.payload['sourceTimeUs'] as num?)?.toInt() ?? _sourceTimeUs;
+        final timelineTimeUs =
+            (event.payload['timelineTimeUs'] as num?)?.toInt() ?? 0;
+        setState(() {
+          _sourceTimeUs = sourceTimeUs;
+          if (!_isTimelineScrubbing) {
+            _timelineTimeUs = timelineTimeUs;
+            _showScrubPreviewOverlay = false;
+            _scrubPreviewBytes = null;
+          }
+        });
+      case FusionXEngineEventType.playbackStateChanged:
+        final state = event.payload['state'] as String? ?? _playbackStatus;
+        setState(() {
+          _playbackStatus = state;
+          if (state == FusionXTransportState.playing.name) {
+            _showScrubPreviewOverlay = false;
+            _scrubPreviewBytes = null;
+          }
+        });
+      case FusionXEngineEventType.firstFrameRendered:
+        setState(() {
+          _firstFrameRendered = true;
+        });
+      case FusionXEngineEventType.scrubFrameAvailable:
+        final frameBytes = event.payload['frameBytes'] as Uint8List?;
+        if (frameBytes == null) {
           return;
         }
         setState(() {
-          _currentSeconds += 1 / _fps;
-          if (_currentSeconds >= _timelineDuration) {
-            _currentSeconds = _timelineDuration;
-            _stopPlayback();
-          }
+          _scrubPreviewBytes = frameBytes;
+          _showScrubPreviewOverlay = true;
+          _firstFrameRendered = true;
         });
-      },
-    );
-    setState(() {});
-  }
-
-  void _stopPlayback() {
-    _playbackTimer?.cancel();
-    _playbackTimer = null;
-    _isPlaying = false;
-    if (mounted) {
-      setState(() {});
+      case FusionXEngineEventType.trimChanged:
+        final trimStartUs =
+            (event.payload['trimStartUs'] as num?)?.toInt() ?? _trimStartUs;
+        final trimEndUs =
+            (event.payload['trimEndUs'] as num?)?.toInt() ?? _trimEndUs;
+        setState(() {
+          _trimStartUs = trimStartUs;
+          _trimEndUs = trimEndUs;
+          _sourceTimeUs = trimStartUs;
+          _timelineTimeUs = 0;
+          _tracks = _buildPhaseOneTracks();
+          _selectedClipId = _hasClip ? _primaryClipId : null;
+        });
+      case FusionXEngineEventType.error:
+        setState(() {
+          _playbackStatus = FusionXTransportState.error.name;
+          _lastError = event.payload['message'] as String? ?? 'Unknown error';
+        });
     }
   }
 
-  void _setCurrentSeconds(double seconds) {
+  void _updateSelectedAssetMetadata({
+    required int sourceDurationUs,
+    required int sourceWidth,
+    required int sourceHeight,
+  }) {
+    final selectedAsset = _selectedAsset;
+    if (selectedAsset == null) {
+      return;
+    }
+    _upsertAsset(
+      selectedAsset.copyWith(
+        durationSeconds: sourceDurationUs / 1000000,
+        width: sourceWidth > 0 ? sourceWidth : selectedAsset.width,
+        height: sourceHeight > 0 ? sourceHeight : selectedAsset.height,
+      ),
+    );
+  }
+
+  List<TimelineTrackData> _buildPhaseOneTracks() {
+    final selectedAsset = _selectedAsset;
+    final clipDurationSeconds = (_trimEndUs - _trimStartUs) / 1000000;
+    if (selectedAsset == null || clipDurationSeconds <= 0) {
+      return const <TimelineTrackData>[
+        TimelineTrackData(
+          kind: TimelineTrackKind.video,
+          clips: <TimelineClipData>[],
+        ),
+      ];
+    }
+
+    return <TimelineTrackData>[
+      TimelineTrackData(
+        kind: TimelineTrackKind.video,
+        clips: <TimelineClipData>[
+          TimelineClipData(
+            id: _primaryClipId,
+            duration: math.max(0.25, clipDurationSeconds).toDouble(),
+            type: TimelineClipType.media,
+            tone: TimelineClipTone.hero,
+            assetId: selectedAsset.id,
+            label: selectedAsset.label,
+            sourceOffsetSeconds: _trimStartUs / 1000000,
+          ),
+        ],
+      ),
+    ];
+  }
+
+  void _upsertAsset(MockAssetItem asset) {
+    final nextAssets = List<MockAssetItem>.from(_assetLibrary.value);
+    final existingIndex =
+        nextAssets.indexWhere((candidate) => candidate.id == asset.id);
+    if (existingIndex >= 0) {
+      nextAssets[existingIndex] = asset;
+    } else {
+      nextAssets.insert(0, asset);
+    }
+    _assetLibrary.value = List<MockAssetItem>.unmodifiable(nextAssets);
+  }
+
+  MockAssetItem? _findAssetByPath(String path) {
+    for (final asset in _assetLibrary.value) {
+      if (asset.localPath == path) {
+        return asset;
+      }
+    }
+    return null;
+  }
+
+  void _handleDockTab(EditorMediaTab tab) {
     setState(() {
-      _currentSeconds = seconds.clamp(0.0, _timelineDuration).toDouble();
+      _activeTab = tab;
     });
+    _showPhaseLaterMessage(tab);
+  }
+
+  Future<void> _openMediaSheet(EditorMediaTab initialTab) async {
+    var sheetTab = _mediaSheetTabs.contains(initialTab)
+        ? initialTab
+        : EditorMediaTab.video;
+    String? selectedMediaId;
+    unawaited(_ensureDeviceMediaLoaded(sheetTab));
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final mediaItems = _deviceMediaForTab(sheetTab);
+            final isLoading = _isDeviceMediaLoading(sheetTab);
+            final errorMessage = _deviceMediaErrorForTab(sheetTab);
+            final importEnabled =
+                sheetTab == EditorMediaTab.video && selectedMediaId != null;
+            final importHint = sheetTab == EditorMediaTab.video
+                ? selectedMediaId == null
+                    ? 'Select one video, then press Import.'
+                    : null
+                : 'Image import will be wired after the native image preview path is added.';
+
+            return MediaBottomSheet(
+              activeTab: sheetTab,
+              mediaItems: mediaItems,
+              selectedMediaId: selectedMediaId,
+              isLoading: isLoading,
+              errorMessage: errorMessage,
+              importEnabled: importEnabled,
+              importHint: importHint,
+              thumbnailLoader: _loadDeviceMediaThumbnail,
+              onTabChanged: (tab) {
+                setSheetState(() {
+                  sheetTab = tab;
+                  selectedMediaId = null;
+                });
+                unawaited(_ensureDeviceMediaLoaded(tab));
+              },
+              onMediaSelected: (item) {
+                setSheetState(() {
+                  selectedMediaId = item.id;
+                });
+              },
+              onImport: () async {
+                DeviceMediaItem? selectedItem;
+                for (final item in mediaItems) {
+                  if (item.id == selectedMediaId) {
+                    selectedItem = item;
+                    break;
+                  }
+                }
+                if (selectedItem == null) {
+                  return;
+                }
+                if (selectedItem.tab != EditorMediaTab.video) {
+                  _showPhaseLaterMessage(selectedItem.tab);
+                  return;
+                }
+                Navigator.of(context).pop();
+                await Future<void>.delayed(const Duration(milliseconds: 120));
+                await _importDeviceMedia(selectedItem);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  List<DeviceMediaItem> _deviceMediaForTab(EditorMediaTab tab) {
+    return _deviceMedia[tab] ?? const <DeviceMediaItem>[];
+  }
+
+  bool _isDeviceMediaLoading(EditorMediaTab tab) {
+    return _deviceMediaLoading[tab] ?? false;
+  }
+
+  String? _deviceMediaErrorForTab(EditorMediaTab tab) {
+    return _deviceMediaErrors[tab];
+  }
+
+  Future<void> _warmDeviceMediaLibraryIfPermitted() async {
+    if (!_isAndroidFoundationSupported) {
+      return;
+    }
+
+    try {
+      final videoGranted = await _deviceMediaBridge.hasMediaPermission(
+        EditorMediaTab.video,
+      );
+      if (!mounted || !videoGranted) {
+        return;
+      }
+      await _ensureDeviceMediaLoaded(EditorMediaTab.video);
+
+      final imageGranted = await _deviceMediaBridge.hasMediaPermission(
+        EditorMediaTab.image,
+      );
+      if (!mounted || !imageGranted) {
+        return;
+      }
+      await _ensureDeviceMediaLoaded(EditorMediaTab.image);
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  Future<void> _ensureDeviceMediaLoaded(
+    EditorMediaTab tab, {
+    bool force = false,
+  }) async {
+    if (!_mediaSheetTabs.contains(tab)) {
+      return;
+    }
+    if ((_deviceMediaLoading[tab] ?? false) && !force) {
+      return;
+    }
+    if (!force && (_deviceMedia[tab]?.isNotEmpty ?? false)) {
+      return;
+    }
+
+    setState(() {
+      _deviceMediaLoading = <EditorMediaTab, bool>{
+        ..._deviceMediaLoading,
+        tab: true,
+      };
+      _deviceMediaErrors = <EditorMediaTab, String?>{
+        ..._deviceMediaErrors,
+        tab: null,
+      };
+    });
+
+    try {
+      final mediaItems = await _deviceMediaBridge.listMedia(tab);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _deviceMedia = <EditorMediaTab, List<DeviceMediaItem>>{
+          ..._deviceMedia,
+          tab: mediaItems,
+        };
+        _deviceMediaLoading = <EditorMediaTab, bool>{
+          ..._deviceMediaLoading,
+          tab: false,
+        };
+      });
+      _primeDeviceMediaThumbnails(tab);
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _deviceMediaLoading = <EditorMediaTab, bool>{
+          ..._deviceMediaLoading,
+          tab: false,
+        };
+        _deviceMediaErrors = <EditorMediaTab, String?>{
+          ..._deviceMediaErrors,
+          tab: error.message ?? 'Unable to access the Android media library.',
+        };
+      });
+    } on MissingPluginException {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _deviceMediaLoading = <EditorMediaTab, bool>{
+          ..._deviceMediaLoading,
+          tab: false,
+        };
+        _deviceMediaErrors = <EditorMediaTab, String?>{
+          ..._deviceMediaErrors,
+          tab: 'The Android media browser bridge is unavailable in this build.',
+        };
+      });
+    }
+  }
+
+  void _primeDeviceMediaThumbnails(EditorMediaTab tab) {
+    final mediaItems = _deviceMediaForTab(tab);
+    for (final item in mediaItems.take(9)) {
+      unawaited(_loadDeviceMediaThumbnail(item));
+    }
+  }
+
+  Future<Uint8List?> _loadDeviceMediaThumbnail(DeviceMediaItem item) {
+    return _thumbnailRequests.putIfAbsent(
+      item.id,
+      () => _deviceMediaBridge.loadThumbnail(item: item),
+    );
+  }
+
+  Future<void> _importDeviceMedia(DeviceMediaItem item) async {
+    if (!_canUseNativePlayback) {
+      _showFoundationUnavailableMessage();
+      return;
+    }
+    final existingAsset = _findAssetByPath(item.uri);
+    final asset = existingAsset ?? _buildImportedVideoAsset(item);
+    _upsertAsset(asset);
+    await _loadAsset(asset);
+  }
+
+  MockAssetItem _buildImportedVideoAsset(DeviceMediaItem item) {
+    final clipCount = _assetLibrary.value
+        .where((asset) => asset.tab == EditorMediaTab.video)
+        .length;
+    return MockAssetItem(
+      id: 'video-${DateTime.now().millisecondsSinceEpoch}',
+      tab: EditorMediaTab.video,
+      label:
+          item.label.isEmpty ? 'Imported Video ${clipCount + 1}' : item.label,
+      tone: 80,
+      localPath: item.uri,
+      isImported: true,
+      durationSeconds:
+          item.durationUs == null ? null : item.durationUs! / 1000000,
+      width: item.width,
+      height: item.height,
+    );
+  }
+
+  Future<void> _loadAsset(MockAssetItem asset) async {
+    if (asset.tab != EditorMediaTab.video) {
+      _showPhaseLaterMessage(asset.tab);
+      return;
+    }
+    if (!_canUseNativePlayback || asset.localPath == null) {
+      _showFoundationUnavailableMessage();
+      return;
+    }
+
+    final knownDurationUs = ((asset.durationSeconds ?? 0) * 1000000).round();
+    setState(() {
+      _activeTab = asset.tab;
+      _selectedAssetId = asset.id;
+      _selectedClipId = _primaryClipId;
+      _playbackStatus = 'loading';
+      _lastError = null;
+      _firstFrameRendered = false;
+      _sourceDurationUs = knownDurationUs;
+      _trimStartUs = 0;
+      _trimEndUs = knownDurationUs;
+      _sourceTimeUs = 0;
+      _timelineTimeUs = 0;
+      _showScrubPreviewOverlay = false;
+      _scrubPreviewBytes = null;
+      if (asset.width != null && asset.height != null && asset.height! > 0) {
+        _projectWidth = asset.width!;
+        _projectHeight = asset.height!;
+      } else {
+        _projectWidth = _defaultProjectWidth;
+        _projectHeight = _defaultProjectHeight;
+      }
+      _tracks = _buildPhaseOneTracks();
+    });
+
+    await _engineBridge.dispatch(
+      FusionXEngineCommand(
+        type: FusionXEngineCommandType.loadClip,
+        payload: LoadClipPayload(path: asset.localPath!).toMap(),
+      ),
+    );
+  }
+
+  Future<void> _togglePlayback() async {
+    if (!_hasClip || !_canUseNativePlayback) {
+      return;
+    }
+    await _engineBridge.dispatch(
+      FusionXEngineCommand(
+        type: _isPlaying
+            ? FusionXEngineCommandType.pause
+            : FusionXEngineCommandType.play,
+      ),
+    );
+  }
+
+  void _setCurrentSeconds(double seconds) {
+    final clampedSeconds = seconds.clamp(0.0, _timelineDuration).toDouble();
+    final timelineTimeUs = (clampedSeconds * 1000000).round();
+    setState(() {
+      _timelineTimeUs = timelineTimeUs;
+    });
+    if (!_hasClip || !_canUseNativePlayback) {
+      return;
+    }
+    final commandType = _isTimelineScrubbing
+        ? FusionXEngineCommandType.scrubTo
+        : FusionXEngineCommandType.seekTo;
+    unawaited(
+      _engineBridge.dispatch(
+        FusionXEngineCommand(
+          type: commandType,
+          payload: SeekToPayload(
+            timelineTime: EngineTime.fromMicroseconds(timelineTimeUs),
+          ).toMap(),
+        ),
+      ),
+    );
+  }
+
+  void _handleTimelineScrubStateChanged(bool isScrubbing) {
+    if (_isTimelineScrubbing == isScrubbing) {
+      return;
+    }
+    setState(() {
+      _isTimelineScrubbing = isScrubbing;
+    });
+    if (isScrubbing) {
+      if (_isPlaying) {
+        unawaited(_engineBridge.dispatch(const FusionXEngineCommand(
+          type: FusionXEngineCommandType.pause,
+        )));
+      }
+      return;
+    }
+    if (!_hasClip || !_canUseNativePlayback) {
+      return;
+    }
+    unawaited(
+      _engineBridge.dispatch(
+        FusionXEngineCommand(
+          type: FusionXEngineCommandType.seekTo,
+          payload: SeekToPayload(
+            timelineTime: EngineTime.fromMicroseconds(_timelineTimeUs),
+          ).toMap(),
+        ),
+      ),
+    );
   }
 
   void _selectClip(String clipId) {
+    if (clipId != _primaryClipId) {
+      return;
+    }
     setState(() {
       _selectedClipId = clipId;
     });
@@ -138,371 +707,93 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     });
   }
 
-  void _splitSelectedClip() {
-    final selectedClipId = _selectedClipId;
-    if (selectedClipId == null) {
-      return;
-    }
-    for (var trackIndex = 0; trackIndex < _tracks.length; trackIndex++) {
-      var cursor = 0.0;
-      final clips = List<TimelineClipData>.from(_tracks[trackIndex].clips);
-      for (var clipIndex = 0; clipIndex < clips.length; clipIndex++) {
-        final clip = clips[clipIndex];
-        final clipStart = cursor;
-        final clipEnd = cursor + clip.duration;
-        if (clip.id != selectedClipId ||
-            clip.type != TimelineClipType.media ||
-            _currentSeconds <= clipStart + 0.1 ||
-            _currentSeconds >= clipEnd - 0.1) {
-          cursor = clipEnd;
-          continue;
-        }
-        final leftDuration = _currentSeconds - clipStart;
-        final rightDuration = clipEnd - _currentSeconds;
-        final splitGroupId = clip.splitGroupId ?? 'split-${clip.assetId}-${DateTime.now().millisecondsSinceEpoch}';
-        final leftClip = clip.copyWith(
-          duration: leftDuration,
-          id: '${clip.id}-a',
-          splitGroupId: splitGroupId,
-        );
-        final rightClip = clip.copyWith(
-          duration: rightDuration,
-          id: '${clip.id}-b',
-          splitGroupId: splitGroupId,
-          sourceOffsetSeconds: (clip.sourceOffsetSeconds ?? 0) + leftDuration,
-        );
-        clips
-          ..removeAt(clipIndex)
-          ..insertAll(clipIndex, [leftClip, rightClip]);
-        setState(() {
-          _tracks = _replaceTrack(trackIndex, clips);
-          _selectedClipId = rightClip.id;
-        });
-        return;
-      }
-    }
-  }
-
-  void _duplicateSelectedClip() {
-    final selectedClipId = _selectedClipId;
-    if (selectedClipId == null) {
-      return;
-    }
-    for (var trackIndex = 0; trackIndex < _tracks.length; trackIndex++) {
-      final clips = List<TimelineClipData>.from(_tracks[trackIndex].clips);
-      final clipIndex =
-          clips.indexWhere((clip) => clip.id == selectedClipId);
-      if (clipIndex < 0) {
-        continue;
-      }
-      final clip = clips[clipIndex];
-      final duplicate = clip.copyWith(
-        id: '${clip.id}-copy-${DateTime.now().millisecondsSinceEpoch}',
-      );
-      clips.insert(clipIndex + 1, duplicate);
-      setState(() {
-        _tracks = _replaceTrack(trackIndex, clips);
-        _selectedClipId = duplicate.id;
-      });
-      return;
-    }
-  }
-
-  void _deleteSelectedClip() {
-    final selectedClipId = _selectedClipId;
-    if (selectedClipId == null) {
-      return;
-    }
-    for (var trackIndex = 0; trackIndex < _tracks.length; trackIndex++) {
-      final clips = List<TimelineClipData>.from(_tracks[trackIndex].clips);
-      final previousLength = clips.length;
-      clips.removeWhere((clip) => clip.id == selectedClipId);
-      if (clips.length == previousLength) {
-        continue;
-      }
-      setState(() {
-        _tracks = _replaceTrack(trackIndex, clips);
-        _selectedClipId = clips.isEmpty ? null : clips.last.id;
-      });
-      return;
-    }
-  }
-
   void _trimSelectedClipLeft() {
-    _trimSelectedClip(fromStart: true);
+    unawaited(_trimSelectedClip(fromStart: true));
   }
 
   void _trimSelectedClipRight() {
-    _trimSelectedClip(fromStart: false);
+    unawaited(_trimSelectedClip(fromStart: false));
   }
 
-  void _trimSelectedClip({required bool fromStart}) {
-    final selectedClipId = _selectedClipId;
-    if (selectedClipId == null) {
+  Future<void> _trimSelectedClip({required bool fromStart}) async {
+    if (!_hasClip ||
+        !_canUseNativePlayback ||
+        _selectedClipId != _primaryClipId) {
       return;
     }
-    for (var trackIndex = 0; trackIndex < _tracks.length; trackIndex++) {
-      var cursor = 0.0;
-      final clips = List<TimelineClipData>.from(_tracks[trackIndex].clips);
-      for (var clipIndex = 0; clipIndex < clips.length; clipIndex++) {
-        final clip = clips[clipIndex];
-        final clipStart = cursor;
-        final clipEnd = cursor + clip.duration;
-        if (clip.id != selectedClipId || clip.type != TimelineClipType.media) {
-          cursor = clipEnd;
-          continue;
-        }
-        if (fromStart) {
-          final nextStart = _currentSeconds.clamp(clipStart, clipEnd - 0.25);
-          final delta = nextStart - clipStart;
-          clips[clipIndex] = clip.copyWith(
-            duration: clip.duration - delta,
-            sourceOffsetSeconds: (clip.sourceOffsetSeconds ?? 0) + delta,
-          );
-        } else {
-          final nextEnd = _currentSeconds.clamp(clipStart + 0.25, clipEnd);
-          clips[clipIndex] = clip.copyWith(duration: nextEnd - clipStart);
-        }
-        setState(() {
-          _tracks = _replaceTrack(trackIndex, clips);
-        });
-        return;
-      }
-    }
-  }
 
-  void _reorderClip(String clipId, int insertionIndex) {
-    for (var trackIndex = 0; trackIndex < _tracks.length; trackIndex++) {
-      final clips = List<TimelineClipData>.from(_tracks[trackIndex].clips);
-      final clipIndex = clips.indexWhere((clip) => clip.id == clipId);
-      if (clipIndex < 0) {
-        continue;
-      }
-      final clip = clips.removeAt(clipIndex);
-      final targetIndex = insertionIndex.clamp(0, clips.length);
-      clips.insert(targetIndex, clip);
-      setState(() {
-        _tracks = _replaceTrack(trackIndex, clips);
-        _selectedClipId = clip.id;
-      });
-      return;
-    }
-  }
+    final currentSourceUs =
+        _sourceTimeUs.clamp(_trimStartUs, _trimEndUs).toInt();
+    final nextTrimStartUs = fromStart
+        ? currentSourceUs.clamp(0, _trimEndUs - _minimumTrimUs).toInt()
+        : _trimStartUs;
+    final nextTrimEndUs = fromStart
+        ? _trimEndUs
+        : currentSourceUs
+            .clamp(
+              _trimStartUs + _minimumTrimUs,
+              _sourceDurationUs,
+            )
+            .toInt();
 
-  List<TimelineTrackData> _replaceTrack(int index, List<TimelineClipData> clips) {
-    final nextTracks = List<TimelineTrackData>.from(_tracks);
-    nextTracks[index] = nextTracks[index].copyWith(clips: clips);
-    return List<TimelineTrackData>.unmodifiable(nextTracks);
-  }
-
-  void _handleDockTab(EditorMediaTab tab) {
-    setState(() {
-      _activeTab = tab;
-    });
-    _openMediaSheet(tab);
-  }
-
-  Future<void> _openMediaSheet(EditorMediaTab tab) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return MediaBottomSheet(
-          activeTab: tab,
-          assetsListenable: _assetLibrary,
-          onImportTap: (importTab) async {
-            final newAsset = _buildImportedMockAsset(importTab);
-            _assetLibrary.value = [..._assetLibrary.value, newAsset];
-          },
-          onAssetAdd: (asset) async {
-            Navigator.of(context).pop();
-            _addAssetToTimeline(asset);
-          },
-        );
-      },
+    await _engineBridge.dispatch(
+      FusionXEngineCommand(
+        type: FusionXEngineCommandType.setTrim,
+        payload: SetTrimPayload(
+          trimStartUs: nextTrimStartUs,
+          trimEndUs: nextTrimEndUs,
+        ).toMap(),
+      ),
     );
-  }
-
-  void _addAssetToTimeline(MockAssetItem asset) {
-    final trackIndex = _trackIndexForTab(asset.tab);
-    if (trackIndex < 0) {
-      return;
-    }
-    final clipId = 'clip-${asset.id}-${DateTime.now().millisecondsSinceEpoch}';
-    final clip = TimelineClipData(
-      id: clipId,
-      assetId: asset.id,
-      duration: asset.durationSeconds ?? 3.5,
-      tone: TimelineClipTone.hero,
-      type: TimelineClipType.media,
-      sourceOffsetSeconds: 0,
-      label: asset.label,
-    );
-    final clips = List<TimelineClipData>.from(_tracks[trackIndex].clips)
-      ..add(clip);
-    setState(() {
-      _tracks = _replaceTrack(trackIndex, clips);
-      _selectedClipId = clip.id;
-      _activeTab = asset.tab == EditorMediaTab.image
-          ? EditorMediaTab.image
-          : asset.tab == EditorMediaTab.video
-              ? EditorMediaTab.video
-              : _activeTab;
-    });
-  }
-
-  int _trackIndexForTab(EditorMediaTab tab) {
-    final kind = switch (tab) {
-      EditorMediaTab.video => TimelineTrackKind.video,
-      EditorMediaTab.image => TimelineTrackKind.image,
-      EditorMediaTab.audio => TimelineTrackKind.audio,
-      EditorMediaTab.text => TimelineTrackKind.text,
-      EditorMediaTab.lipSync => TimelineTrackKind.lipSync,
-    };
-    return _tracks.indexWhere((track) => track.kind == kind);
-  }
-
-  MockAssetItem _buildImportedMockAsset(EditorMediaTab tab) {
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    return MockAssetItem(
-      id: 'asset-$stamp',
-      tab: tab,
-      label: switch (tab) {
-        EditorMediaTab.video => 'Imported Video $stamp',
-        EditorMediaTab.image => 'Imported Image $stamp',
-        EditorMediaTab.audio => 'Imported Audio $stamp',
-        EditorMediaTab.text => 'Imported Text $stamp',
-        EditorMediaTab.lipSync => 'Imported Lip Sync $stamp',
-      },
-      tone: 80,
-      isImported: true,
-      durationSeconds: switch (tab) {
-        EditorMediaTab.video => 6.0,
-        EditorMediaTab.image => 4.0,
-        EditorMediaTab.audio => 6.0,
-        EditorMediaTab.text => 3.0,
-        EditorMediaTab.lipSync => 3.0,
-      },
-      width: tab == EditorMediaTab.video || tab == EditorMediaTab.image
-          ? 1080
-          : null,
-      height: tab == EditorMediaTab.video || tab == EditorMediaTab.image
-          ? 1920
-          : null,
-    );
-  }
-
-  List<MockAssetItem> _buildInitialAssets() {
-    return const <MockAssetItem>[
-      MockAssetItem(
-        id: 'portrait-video',
-        tab: EditorMediaTab.video,
-        label: 'Portrait Video',
-        tone: 80,
-        isImported: true,
-        durationSeconds: 14,
-        width: 1080,
-        height: 1920,
-      ),
-      MockAssetItem(
-        id: 'broll-video',
-        tab: EditorMediaTab.video,
-        label: 'B-Roll',
-        tone: 68,
-        isImported: true,
-        durationSeconds: 6,
-        width: 1920,
-        height: 1080,
-      ),
-      MockAssetItem(
-        id: 'cover-image',
-        tab: EditorMediaTab.image,
-        label: 'Cover Image',
-        tone: 60,
-        isImported: true,
-        durationSeconds: 5,
-        width: 1080,
-        height: 1920,
-      ),
-      MockAssetItem(
-        id: 'voice-audio',
-        tab: EditorMediaTab.audio,
-        label: 'Voiceover',
-        tone: 55,
-        isImported: true,
-        durationSeconds: 14,
-      ),
-      MockAssetItem(
-        id: 'caption-text',
-        tab: EditorMediaTab.text,
-        label: 'Subtitle Block',
-        tone: 42,
-        isImported: true,
-        durationSeconds: 4,
-      ),
-      MockAssetItem(
-        id: 'lipsync-track',
-        tab: EditorMediaTab.lipSync,
-        label: 'Lip Sync',
-        tone: 35,
-        isImported: true,
-        durationSeconds: 4,
-      ),
-    ];
-  }
-
-  List<TimelineTrackData> _buildInitialTracks() {
-    return const <TimelineTrackData>[
-      TimelineTrackData(
-        kind: TimelineTrackKind.video,
-        clips: <TimelineClipData>[
-          TimelineClipData(
-            id: 'clip-video-1',
-            duration: 14,
-            type: TimelineClipType.media,
-            tone: TimelineClipTone.hero,
-            assetId: 'portrait-video',
-            label: 'Portrait Video',
-            sourceOffsetSeconds: 0,
-          ),
-        ],
-      ),
-      TimelineTrackData(
-        kind: TimelineTrackKind.audio,
-        clips: <TimelineClipData>[
-          TimelineClipData(
-            id: 'clip-audio-1',
-            duration: 14,
-            type: TimelineClipType.media,
-            tone: TimelineClipTone.heroMuted,
-            assetId: 'voice-audio',
-            label: 'Voiceover',
-            sourceOffsetSeconds: 0,
-          ),
-        ],
-      ),
-      TimelineTrackData(
-        kind: TimelineTrackKind.text,
-        clips: <TimelineClipData>[
-          TimelineClipData(
-            id: 'clip-text-placeholder',
-            duration: 3,
-            type: TimelineClipType.placeholder,
-            tone: TimelineClipTone.placeholder,
-            label: 'Add Text',
-          ),
-        ],
-      ),
-    ];
   }
 
   void _handleShare() {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('FusionX Clean UI is UI-only. Export/backend are excluded.'),
+        content: Text(
+            'Export remains out of scope until preview transport is stable.'),
       ),
     );
+  }
+
+  void _showPhaseLaterMessage(EditorMediaTab tab) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${tab.label} will be wired in a later engine phase.'),
+      ),
+    );
+  }
+
+  void _showFoundationUnavailableMessage() {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _isAndroidFoundationSupported
+              ? 'Native playback foundation is not ready in this build.'
+              : 'This phase currently runs on Android only.',
+        ),
+      ),
+    );
+  }
+
+  bool get _canUseNativePlayback =>
+      _isAndroidFoundationSupported &&
+      _engineAvailable &&
+      _renderTargetAttached;
+
+  String? _resolveAssetPath(String assetId) {
+    for (final asset in _assetLibrary.value) {
+      if (asset.id == assetId) {
+        return asset.localPath;
+      }
+    }
+    return null;
   }
 
   @override
@@ -528,8 +819,18 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                     workspaceAspectRatio: _workspaceAspectRatio,
                     child: _CleanPreviewCanvas(
                       asset: selectedAsset,
-                      selectedClipId: _selectedClipId,
+                      textureId: _textureId,
                       currentSeconds: _currentSeconds,
+                      isAndroidFoundationSupported:
+                          _isAndroidFoundationSupported,
+                      renderTargetAttached: _renderTargetAttached,
+                      engineAvailable: _engineAvailable,
+                      hasClip: _hasClip,
+                      playbackStatus: _playbackStatus,
+                      firstFrameRendered: _firstFrameRendered,
+                      scrubPreviewBytes: _scrubPreviewBytes,
+                      showScrubPreviewOverlay: _showScrubPreviewOverlay,
+                      lastError: _lastError,
                     ),
                   ),
                 ),
@@ -551,12 +852,20 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                         child: EditorToolsBar(
                           embedded: true,
                           isPlaying: _isPlaying,
-                          onSplit: _selectedClipId == null ? null : _splitSelectedClip,
-                          onTrimRight: _selectedClipId == null ? null : _trimSelectedClipRight,
-                          onTrimLeft: _selectedClipId == null ? null : _trimSelectedClipLeft,
-                          onDuplicate: _selectedClipId == null ? null : _duplicateSelectedClip,
-                          onDelete: _selectedClipId == null ? null : _deleteSelectedClip,
-                          onPlayToggle: _togglePlayback,
+                          onSplit: null,
+                          onTrimRight: _selectedClipId == _primaryClipId
+                              ? _trimSelectedClipRight
+                              : null,
+                          onTrimLeft: _selectedClipId == _primaryClipId
+                              ? _trimSelectedClipLeft
+                              : null,
+                          onDuplicate: null,
+                          onDelete: null,
+                          onPlayToggle: _hasClip
+                              ? () {
+                                  unawaited(_togglePlayback());
+                                }
+                              : null,
                         ),
                       ),
                       Divider(
@@ -576,10 +885,11 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                             selectedClipId: _selectedClipId,
                             onTimeChanged: _setCurrentSeconds,
                             onClipSelected: _selectClip,
-                            onClipReorder: _reorderClip,
+                            onClipReorder: null,
                             onBackgroundTap: _clearSelection,
-                            assetPathResolver: (_) => null,
-                            onScrubStateChanged: (_) {},
+                            assetPathResolver: _resolveAssetPath,
+                            onScrubStateChanged:
+                                _handleTimelineScrubStateChanged,
                           ),
                         ),
                       ),
@@ -592,11 +902,9 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                         padding: const EdgeInsets.fromLTRB(4, 3, 4, 3),
                         child: MediaDock(
                           activeTab: _activeTab,
-                          onAddTap: () => _openMediaSheet(
-                            _activeTab == EditorMediaTab.image
-                                ? EditorMediaTab.image
-                                : EditorMediaTab.video,
-                          ),
+                          onAddTap: () {
+                            unawaited(_openMediaSheet(EditorMediaTab.video));
+                          },
                           onToolTap: _handleDockTab,
                           embedded: true,
                         ),
@@ -616,144 +924,209 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
 class _CleanPreviewCanvas extends StatelessWidget {
   const _CleanPreviewCanvas({
     required this.asset,
-    required this.selectedClipId,
+    required this.textureId,
     required this.currentSeconds,
+    required this.isAndroidFoundationSupported,
+    required this.renderTargetAttached,
+    required this.engineAvailable,
+    required this.hasClip,
+    required this.playbackStatus,
+    required this.firstFrameRendered,
+    required this.scrubPreviewBytes,
+    required this.showScrubPreviewOverlay,
+    required this.lastError,
   });
 
   final MockAssetItem? asset;
-  final String? selectedClipId;
+  final int? textureId;
   final double currentSeconds;
+  final bool isAndroidFoundationSupported;
+  final bool renderTargetAttached;
+  final bool engineAvailable;
+  final bool hasClip;
+  final String playbackStatus;
+  final bool firstFrameRendered;
+  final Uint8List? scrubPreviewBytes;
+  final bool showScrubPreviewOverlay;
+  final String? lastError;
 
   @override
   Widget build(BuildContext context) {
-    final aspectRatio = asset?.aspectRatio ?? (9 / 16);
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[
-            FxPalette.previewTop,
-            FxPalette.previewBottom,
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.06),
+          width: 1,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(26),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (textureId != null && textureId! >= 0 && hasClip)
+              Texture(textureId: textureId!),
+            if (showScrubPreviewOverlay && scrubPreviewBytes != null && hasClip)
+              ColoredBox(
+                color: Colors.black,
+                child: Image.memory(
+                  scrubPreviewBytes!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
+            if (!hasClip || !firstFrameRendered)
+              _CanvasMessage(
+                title: _title,
+                body: _body,
+              ),
+            Positioned(
+              left: 16,
+              top: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.46),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.08),
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  asset?.label ?? 'FusionX Native Preview',
+                  style: const TextStyle(
+                    color: FxPalette.textPrimary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Time ${currentSeconds.toStringAsFixed(2)}s',
+                    style: const TextStyle(
+                      color: FxPalette.textPrimary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    playbackStatus,
+                    style: const TextStyle(
+                      color: FxPalette.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
-      child: Center(
-        child: AspectRatio(
-          aspectRatio: aspectRatio,
-          child: Container(
-            margin: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(26),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  FxPalette.surfaceRaised,
-                  Colors.black.withOpacity(0.78),
+    );
+  }
+
+  String get _title {
+    if (!isAndroidFoundationSupported) {
+      return 'Android only';
+    }
+    if (!engineAvailable) {
+      return 'Native bridge unavailable';
+    }
+    if (!renderTargetAttached) {
+      return 'Preparing surface';
+    }
+    if (!hasClip) {
+      return 'Import a video';
+    }
+    return 'Loading first frame';
+  }
+
+  String get _body {
+    if (!isAndroidFoundationSupported) {
+      return 'Phase 1 native playback is wired for Android first.';
+    }
+    if (!engineAvailable) {
+      return lastError ??
+          'The native playback foundation could not be attached here.';
+    }
+    if (!renderTargetAttached) {
+      return 'Attaching the native preview surface...';
+    }
+    if (!hasClip) {
+      return 'Use the + button to import a real local video into the original editor UI.';
+    }
+    return 'The selected clip is being prepared inside the native preview pipeline.';
+  }
+}
+
+class _CanvasMessage extends StatelessWidget {
+  const _CanvasMessage({
+    required this.title,
+    required this.body,
+  });
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact =
+            constraints.maxWidth < 160 || constraints.maxHeight < 220;
+        return Center(
+          child: SingleChildScrollView(
+            primary: false,
+            padding: EdgeInsets.all(isCompact ? 14 : 24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 240),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.smart_display_rounded,
+                    size: isCompact ? 28 : 40,
+                    color: FxPalette.textPrimary,
+                  ),
+                  SizedBox(height: isCompact ? 8 : 12),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: isCompact
+                        ? Theme.of(context).textTheme.bodyMedium
+                        : Theme.of(context).textTheme.titleMedium,
+                  ),
+                  SizedBox(height: isCompact ? 6 : 8),
+                  Text(
+                    body,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ],
               ),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.06),
-                width: 1,
-              ),
-            ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  top: 16,
-                  bottom: 16,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(22),
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          FxPalette.accentSoft.withOpacity(0.42),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 26,
-                    vertical: 24,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.35),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.05),
-                            width: 1,
-                          ),
-                        ),
-                        child: const Text(
-                          'FusionX Clean UI',
-                          style: TextStyle(
-                            color: FxPalette.textPrimary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.15,
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      const Icon(
-                        Icons.smart_display_rounded,
-                        color: FxPalette.textPrimary,
-                        size: 56,
-                      ),
-                      const SizedBox(height: 14),
-                      Text(
-                        asset?.label ?? 'Visual Stage',
-                        style: const TextStyle(
-                          color: FxPalette.textPrimary,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        selectedClipId == null
-                            ? 'UI-only canvas with no backend, engine, or player.'
-                            : 'Selected clip: $selectedClipId',
-                        style: const TextStyle(
-                          color: FxPalette.textMuted,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Text(
-                        'Time ${currentSeconds.toStringAsFixed(2)}s',
-                        style: const TextStyle(
-                          color: FxPalette.textPrimary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

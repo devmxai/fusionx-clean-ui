@@ -166,7 +166,9 @@ class _TimelinePanelState extends State<TimelinePanel> {
       final nextOffset = (_scaleStartFocusTime * _secondsWidth)
           .clamp(0, _scrollController.position.maxScrollExtent)
           .toDouble();
+      _isSyncingFromExternal = true;
       _scrollController.jumpTo(nextOffset);
+      _isSyncingFromExternal = false;
     });
   }
 
@@ -202,6 +204,15 @@ class _TimelinePanelState extends State<TimelinePanel> {
   void _dispatchTimelineSeconds(double nextSeconds) {
     if ((nextSeconds - widget.currentSeconds).abs() <= 0.002 &&
         _pendingSeconds == null) {
+      return;
+    }
+
+    if (_isScrubInteractionActive || _isBackgroundScrubbing) {
+      _scrollDispatchTimer?.cancel();
+      _scrollDispatchTimer = null;
+      _pendingSeconds = null;
+      _lastDispatchedAt = DateTime.now();
+      widget.onTimeChanged(nextSeconds);
       return;
     }
 
@@ -573,7 +584,10 @@ class _TimelinePanelState extends State<TimelinePanel> {
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
-    if (_isReorderMode) {
+    if (_isReorderMode || _isSyncingFromExternal) {
+      return false;
+    }
+    if (notification.metrics.axis != Axis.horizontal) {
       return false;
     }
     final previousState = _isScrollActive;
@@ -1634,7 +1648,9 @@ class _TimelineVideoFilmstripState extends State<_TimelineVideoFilmstrip> {
       targetWidth: _targetWidth,
       targetHeight: _targetHeight,
     );
-    if (widget.isPlaying && _seedThumbnails != null && _seedThumbnails!.isNotEmpty) {
+    if (widget.isPlaying &&
+        _seedThumbnails != null &&
+        _seedThumbnails!.isNotEmpty) {
       _thumbnailsFuture = null;
       return;
     }
@@ -1850,7 +1866,8 @@ class _TimelineFilmstripCache {
     );
     final key = [
       segmentKey,
-      for (final timestamp in normalizedTimestamps) timestamp.toStringAsFixed(2),
+      for (final timestamp in normalizedTimestamps)
+        timestamp.toStringAsFixed(2),
     ].join('|');
     return _entries.putIfAbsent(
       key,

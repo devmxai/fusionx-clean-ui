@@ -23,8 +23,7 @@ class MediaDock extends StatelessWidget {
     EditorMediaTab.lipSync,
   ];
 
-  bool get _isAddActive =>
-      activeTab == EditorMediaTab.video || activeTab == EditorMediaTab.image;
+  bool get _isAddActive => true;
 
   @override
   Widget build(BuildContext context) {

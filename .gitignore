@@ -30,6 +30,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+/releases/
 /tmp/
 /ios/Flutter/flutter_export_environment.sh
 /ios/Flutter/Generated.xcconfig

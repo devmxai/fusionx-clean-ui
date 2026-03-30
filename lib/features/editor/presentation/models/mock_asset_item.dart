@@ -23,7 +23,8 @@ class MockAssetItem {
   final int? width;
   final int? height;
 
-  bool get isVisual => tab == EditorMediaTab.video || tab == EditorMediaTab.image;
+  bool get isVisual =>
+      tab == EditorMediaTab.video || tab == EditorMediaTab.image;
 
   double? get aspectRatio {
     if (width == null || height == null || width == 0 || height == 0) {

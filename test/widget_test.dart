@@ -10,10 +10,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fusionx_clean_ui/app.dart';
 
 void main() {
-  testWidgets('Clean UI app renders editor chrome', (WidgetTester tester) async {
+  testWidgets('Clean UI app renders the integrated editor shell', (
+    WidgetTester tester,
+  ) async {
     await tester.pumpWidget(const FusionXCleanUiApp());
 
-    expect(find.text('FusionX Clean UI'), findsOneWidget);
+    expect(find.byType(FusionXCleanUiApp), findsOneWidget);
     expect(find.text('Add'), findsOneWidget);
+    expect(find.text('Audio'), findsOneWidget);
+    expect(find.text('Lip Sync'), findsOneWidget);
   });
 }
