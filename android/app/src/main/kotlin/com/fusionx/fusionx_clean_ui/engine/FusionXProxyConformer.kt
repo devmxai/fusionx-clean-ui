@@ -1,6 +1,8 @@
 package com.fusionx.fusionx_clean_ui.engine
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -8,12 +10,14 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.TransformationRequest
 import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import java.io.File
 import java.security.MessageDigest
 import kotlin.math.max
@@ -38,10 +42,14 @@ class FusionXProxyConformer(
         val proxyShortSide = resolveProxyShortSide(sourceWidth, sourceHeight)
         val proxyFile = resolveProxyFile(sourcePath, proxyShortSide)
         if (proxyFile.exists() && proxyFile.length() > 0L) {
+            val sourceDurationUs = readDurationUs(sourcePath)
+            val proxyDurationUs = readDurationUs(proxyFile.absolutePath)
             onReady(
                 FusionXProxyAsset(
                     path = proxyFile.absolutePath,
                     shortSide = proxyShortSide,
+                    sourceDurationUs = sourceDurationUs,
+                    proxyDurationUs = proxyDurationUs,
                 ),
             )
             return
@@ -84,7 +92,15 @@ class FusionXProxyConformer(
             val transformationRequest = TransformationRequest.Builder()
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .build()
+            val videoEncoderSettings = VideoEncoderSettings.Builder()
+                .setBitrate(PROXY_TARGET_BITRATE)
+                .setiFrameIntervalSeconds(PROXY_IFRAME_INTERVAL_SECONDS)
+                .build()
+            val encoderFactory = DefaultEncoderFactory.Builder(applicationContext)
+                .setRequestedVideoEncoderSettings(videoEncoderSettings)
+                .build()
             val transformer = Transformer.Builder(applicationContext)
+                .setEncoderFactory(encoderFactory)
                 .setTransformationRequest(transformationRequest)
                 .addListener(
                     object : Transformer.Listener {
@@ -109,10 +125,14 @@ class FusionXProxyConformer(
                                     activeTransformer = null
                                 }
                             }
+                            val sourceDurationUs = readDurationUs(sourcePath)
+                            val proxyDurationUs = readDurationUs(proxyFile.absolutePath)
                             onReady(
                                 FusionXProxyAsset(
                                     path = proxyFile.absolutePath,
                                     shortSide = proxyShortSide,
+                                    sourceDurationUs = sourceDurationUs,
+                                    proxyDurationUs = proxyDurationUs,
                                 ),
                             )
                         }
@@ -192,6 +212,41 @@ class FusionXProxyConformer(
         return max(MIN_PROXY_SHORT_SIDE, min(MAX_PROXY_SHORT_SIDE, sourceShortSide))
     }
 
+    private fun readDurationUs(path: String): Long {
+        val extractor = MediaExtractor()
+        return try {
+            val uri = resolveMediaUri(path)
+            if (path.startsWith("content://") || path.startsWith("file://")) {
+                extractor.setDataSource(applicationContext, uri, null)
+            } else {
+                extractor.setDataSource(path)
+            }
+
+            var durationUs = 0L
+            for (trackIndex in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(trackIndex)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (!mime.startsWith("video/")) {
+                    continue
+                }
+                val trackDurationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                    format.getLong(MediaFormat.KEY_DURATION)
+                } else {
+                    0L
+                }
+                durationUs = max(durationUs, trackDurationUs)
+            }
+            durationUs.coerceAtLeast(0L)
+        } catch (_: Throwable) {
+            0L
+        } finally {
+            try {
+                extractor.release()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     private fun resolveProxySize(width: Int, height: Int, shortSide: Int): Pair<Int, Int> {
         val safeWidth = width.coerceAtLeast(1)
         val safeHeight = height.coerceAtLeast(1)
@@ -212,8 +267,10 @@ class FusionXProxyConformer(
     }
 
     companion object {
-        private const val MIN_PROXY_SHORT_SIDE = 540
-        private const val MAX_PROXY_SHORT_SIDE = 720
-        private const val PROXY_SCHEMA_VERSION = "proxy_v1"
+        private const val MIN_PROXY_SHORT_SIDE = 360
+        private const val MAX_PROXY_SHORT_SIDE = 480
+        private const val PROXY_TARGET_BITRATE = 1_400_000
+        private const val PROXY_IFRAME_INTERVAL_SECONDS = 0.1f
+        private const val PROXY_SCHEMA_VERSION = "proxy_v2_dense_iframe"
     }
 }

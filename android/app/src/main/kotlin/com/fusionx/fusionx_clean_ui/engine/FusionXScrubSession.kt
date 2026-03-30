@@ -44,6 +44,7 @@ class FusionXScrubSession(
                     renderTarget = renderTarget,
                     transport = transport,
                     events = events,
+                    timeMapper = resolveTimeMapper(asset),
                     announceClipLoaded = false,
                     onClipPrepared = {
                         synchronized(lock) {
@@ -55,6 +56,7 @@ class FusionXScrubSession(
                         }
                     },
                     renderInitialFrameOnLoad = false,
+                    resizeRenderTargetOnLoad = false,
                 )
                 val shouldDiscard = synchronized(lock) {
                     requestGeneration != generation || sourceClipPath != path
@@ -125,5 +127,17 @@ class FusionXScrubSession(
             proxySession?.release()
             proxySession = null
         }
+    }
+
+    private fun resolveTimeMapper(asset: FusionXProxyAsset): FusionXMediaTimeMapper {
+        val sourceDurationUs = asset.sourceDurationUs
+        val proxyDurationUs = asset.proxyDurationUs
+        if (sourceDurationUs <= 0L || proxyDurationUs <= 0L) {
+            return FusionXMediaTimeMapper.Identity
+        }
+        return FusionXMediaTimeMapper.DurationRatio(
+            sourceDurationUs = sourceDurationUs,
+            mediaDurationUs = proxyDurationUs,
+        )
     }
 }

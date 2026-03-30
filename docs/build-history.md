@@ -10,6 +10,40 @@
 
 ## Releases
 
+### V32
+
+- APK name:
+  - `Fusion X V32 - Duration Aware Proxy Preview.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `DAP + DIF + STM + RLS`
+- Meaning:
+  - `DAP` = duration-aware proxy mapping
+  - `DIF` = dense iframe proxy
+  - `STM` = source-to-media time mapping
+  - `RLS` = release APK build
+- Notes:
+  - added `FusionXMediaTimeMapper` so proxy scrub no longer assumes proxy
+    timestamps exactly match source timestamps; proxy playback can now map
+    between source time and proxy media time using measured clip durations
+  - `FusionXProxyConformer` now generates a more scrub-friendly proxy profile:
+    lower preview resolution, tighter H.264 keyframe cadence, and a new proxy
+    schema version so older softer proxies are not reused
+  - proxy metadata now stores both source and proxy durations and passes them
+    into the native scrub session
+  - proxy decoder sessions no longer resize the shared preview surface down to
+    proxy resolution, which should reduce unnecessary quality collapse while
+    scrubbing
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - release APK build verification is included with this version
+  - real-device validation is still required to judge whether short-clip tail
+    lag and end-of-clip proportional scrub behavior improved materially
+  - this version continues the post-`Beta 1` preview-pipeline hardening phase
+    and is focused on scrub correctness rather than adding editor features
+
 ### V31
 
 - APK name:

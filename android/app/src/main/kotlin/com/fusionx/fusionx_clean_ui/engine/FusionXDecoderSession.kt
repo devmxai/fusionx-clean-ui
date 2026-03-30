@@ -18,9 +18,11 @@ class FusionXDecoderSession(
     private val renderTarget: FusionXRenderTarget,
     private val transport: FusionXTransport,
     private val events: FusionXEventDispatcher,
+    private val timeMapper: FusionXMediaTimeMapper = FusionXMediaTimeMapper.Identity,
     private val announceClipLoaded: Boolean = true,
     private val onClipPrepared: (() -> Unit)? = null,
     private val renderInitialFrameOnLoad: Boolean = true,
+    private val resizeRenderTargetOnLoad: Boolean = true,
 ) {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val resourceLock = Any()
@@ -262,7 +264,9 @@ class FusionXDecoderSession(
                 activeDecoder.dequeueOutputBuffer(outputBufferInfo, SCRUB_DEQUEUE_TIMEOUT_US)
             when {
                 outputIndex >= 0 -> {
-                    val frameSourceTimeUs = outputBufferInfo.presentationTimeUs
+                    val frameSourceTimeUs = timeMapper.mediaToSourceTimeUs(
+                        outputBufferInfo.presentationTimeUs,
+                    )
                     lastDecodedSourceTimeUs = frameSourceTimeUs
 
                     val pendingAfterOutput = consumePendingScrubSourceTimeUs()
@@ -384,7 +388,9 @@ class FusionXDecoderSession(
 
         val width = format.getIntegerSafely(MediaFormat.KEY_WIDTH, 720)
         val height = format.getIntegerSafely(MediaFormat.KEY_HEIGHT, 1280)
-        renderTarget.resize(width, height)
+        if (resizeRenderTargetOnLoad) {
+            renderTarget.resize(width, height)
+        }
 
         val localDecoder = MediaCodec.createDecoderByType(mime)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -453,7 +459,9 @@ class FusionXDecoderSession(
                 activeDecoder.dequeueOutputBuffer(outputBufferInfo, PLAY_DEQUEUE_TIMEOUT_US)
             when {
                 outputIndex >= 0 -> {
-                    val frameSourceTimeUs = outputBufferInfo.presentationTimeUs
+                    val frameSourceTimeUs = timeMapper.mediaToSourceTimeUs(
+                        outputBufferInfo.presentationTimeUs,
+                    )
                     if (frameSourceTimeUs < playbackStartSourceTimeUs) {
                         activeDecoder.releaseOutputBuffer(outputIndex, false)
                         continue
@@ -522,7 +530,9 @@ class FusionXDecoderSession(
             val outputIndex = activeDecoder.dequeueOutputBuffer(outputBufferInfo, dequeueTimeoutUs)
             when {
                 outputIndex >= 0 -> {
-                    val frameSourceTimeUs = outputBufferInfo.presentationTimeUs
+                    val frameSourceTimeUs = timeMapper.mediaToSourceTimeUs(
+                        outputBufferInfo.presentationTimeUs,
+                    )
                     val shouldRender =
                         frameSourceTimeUs >= targetSourceTimeUs ||
                             (outputBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
@@ -558,8 +568,13 @@ class FusionXDecoderSession(
     private fun prepareCodecForSourceTimeUs(sourceTimeUs: Long): Long {
         val activeExtractor = requireExtractor()
         val activeDecoder = requireDecoder()
-        activeExtractor.seekTo(sourceTimeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-        val preparedSourceTimeUs = activeExtractor.sampleTime.coerceAtLeast(0L)
+        activeExtractor.seekTo(
+            timeMapper.sourceToMediaTimeUs(sourceTimeUs),
+            MediaExtractor.SEEK_TO_PREVIOUS_SYNC,
+        )
+        val preparedSourceTimeUs = timeMapper.mediaToSourceTimeUs(
+            activeExtractor.sampleTime.coerceAtLeast(0L),
+        )
         activeDecoder.flush()
         clearDecoderContinuationReady()
         return preparedSourceTimeUs
@@ -580,8 +595,9 @@ class FusionXDecoderSession(
             ?: throw IllegalStateException("Decoder input buffer is unavailable.")
 
         val sampleSize = activeExtractor.readSampleData(inputBuffer, 0)
-        val sourceTimeUs = activeExtractor.sampleTime
-        if (sampleSize < 0 || sourceTimeUs < 0L || sourceTimeUs > trimEndUs) {
+        val mediaTimeUs = activeExtractor.sampleTime
+        val sourceTimeUs = timeMapper.mediaToSourceTimeUs(mediaTimeUs)
+        if (sampleSize < 0 || mediaTimeUs < 0L || sourceTimeUs > trimEndUs) {
             activeDecoder.queueInputBuffer(
                 inputIndex,
                 0,
@@ -596,7 +612,7 @@ class FusionXDecoderSession(
             inputIndex,
             0,
             sampleSize,
-            sourceTimeUs,
+            mediaTimeUs,
             0,
         )
         activeExtractor.advance()

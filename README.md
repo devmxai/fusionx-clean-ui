@@ -12,7 +12,7 @@ editor.
 
 Current milestone:
 
-- `Beta 1`
+- `Beta 2`
 - this version is considered a good Android-first baseline for continuing the
   engine build, even though some scrub edge cases and advanced editor features
   are still open
@@ -179,13 +179,22 @@ Latest attempt in progress:
   original playback decoder
 - the scrub proxy integration required lifting Android `minSdkVersion` from 19
   to 21 so the current helper stack can build cleanly in this project
+- the scrub proxy path now measures both source duration and proxy duration and
+  maps scrub time between them explicitly instead of assuming both timestamp
+  domains are identical
+- the scrub proxy conformer now emits a denser H.264 proxy profile with a
+  tighter I-frame interval and a smaller preview footprint so scrubbing is
+  optimized for responsiveness rather than visual fidelity alone
+- proxy decoder sessions no longer downsize the shared preview surface to the
+  proxy's resolution, which should reduce unnecessary blur during scrub while
+  keeping the same single-surface runtime model
 
 This is the current top blocking issue before moving forward to more advanced
 editor behaviors.
 
-## Beta 1 Notes
+## Beta 2 Notes
 
-What `Beta 1` means right now:
+What `Beta 2` means right now:
 
 - the original product UI is no longer a mock-only shell
 - native playback and trim are working in the real editor surface
@@ -194,7 +203,7 @@ What `Beta 1` means right now:
 - overall behavior is now good enough to preserve as the first beta baseline
   before moving to larger engine development phases
 
-What `Beta 1` does not mean:
+What `Beta 2` does not mean:
 
 - scrub is not yet at final professional quality on every clip
 - the engine is not feature-complete
