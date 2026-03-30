@@ -54,6 +54,10 @@ class FusionXRenderTarget(
         }
     }
 
+    fun currentFrameSequence(): Long = 0L
+
+    fun awaitNextFrame(previousFrameSequence: Long, timeoutMs: Long): Boolean = true
+
     private fun drawBitmapToCanvas(canvas: Canvas, bitmap: Bitmap) {
         val targetWidth = width.toFloat().coerceAtLeast(1f)
         val targetHeight = height.toFloat().coerceAtLeast(1f)

@@ -4,6 +4,8 @@ enum FusionXEngineCommandType {
   attachRenderTarget,
   detachRenderTarget,
   loadClip,
+  beginScrub,
+  endScrub,
   play,
   pause,
   seekTo,
@@ -14,6 +16,7 @@ enum FusionXEngineCommandType {
 
 enum FusionXEngineEventType {
   ready,
+  previewTargetChanged,
   durationResolved,
   positionChanged,
   playbackStateChanged,
@@ -121,6 +124,20 @@ class LoadClipPayload {
 
 class SeekToPayload {
   const SeekToPayload({
+    required this.timelineTime,
+  });
+
+  final EngineTime timelineTime;
+
+  Map<String, Object> toMap() {
+    return <String, Object>{
+      'timelineTimeUs': timelineTime.inMicroseconds,
+    };
+  }
+}
+
+class EndScrubPayload {
+  const EndScrubPayload({
     required this.timelineTime,
   });
 

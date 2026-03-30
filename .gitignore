@@ -31,6 +31,9 @@ migrate_working_dir/
 .pub/
 /build/
 /releases/
+/android/app/.cxx/
+/.gradle-local/
+/project/
 /tmp/
 /ios/Flutter/flutter_export_environment.sh
 /ios/Flutter/Generated.xcconfig

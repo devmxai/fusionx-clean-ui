@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/media/device_media_library_bridge.dart';
-import '../../../../core/media/native_media_thumbnailer.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../engine/bridge/method_channel_fusionx_engine_bridge.dart';
 import '../../../../engine/contracts/engine_contracts.dart';
@@ -35,6 +34,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   static const int _previewSurfaceWidth = 720;
   static const int _previewSurfaceHeight = 1280;
   static const int _minimumTrimUs = 250000;
+  static const int _scrubSettleToleranceUs = 40000;
   static const String _primaryClipId = 'clip-primary';
   static const List<EditorMediaTab> _mediaSheetTabs = <EditorMediaTab>[
     EditorMediaTab.video,
@@ -42,6 +42,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   ];
 
   late final ValueNotifier<List<MockAssetItem>> _assetLibrary;
+  final ValueNotifier<int> _previewTimelineTimeUs = ValueNotifier<int>(0);
   final MethodChannelFusionXEngineBridge _engineBridge =
       MethodChannelFusionXEngineBridge();
   final DeviceMediaLibraryBridge _deviceMediaBridge =
@@ -60,8 +61,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   bool _engineAvailable = true;
   bool _firstFrameRendered = false;
   bool _isTimelineScrubbing = false;
-  bool _showScrubPreviewOverlay = false;
-  bool _scrubPreviewCacheLoading = false;
+  bool _isTimelineScrubSettling = false;
   int _projectWidth = _defaultProjectWidth;
   int _projectHeight = _defaultProjectHeight;
   int _sourceDurationUs = 0;
@@ -84,11 +84,10 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   };
   final Map<String, Future<Uint8List?>> _thumbnailRequests =
       <String, Future<Uint8List?>>{};
-  Timer? _scrubPreviewWarmupTimer;
-  _ScrubPreviewFrame? _activeScrubPreviewFrame;
-  List<_ScrubPreviewFrame> _scrubPreviewFrames = const <_ScrubPreviewFrame>[];
-  String? _scrubPreviewCacheKey;
-  int _scrubPreviewRequestToken = 0;
+  Future<void>? _scrubDispatchLoop;
+  Future<void>? _timelineScrubCompletionTask;
+  int? _pendingScrubTimelineTimeUs;
+  bool _nativeScrubReady = false;
 
   bool get _isAndroidFoundationSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -103,8 +102,6 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     }
     return _projectWidth / _projectHeight;
   }
-
-  double get _currentSeconds => _timelineTimeUs / 1000000;
 
   double get _timelineDuration => _hasClip
       ? math.max(0.25, (_trimEndUs - _trimStartUs) / 1000000).toDouble()
@@ -134,8 +131,9 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
 
   @override
   void dispose() {
-    _scrubPreviewWarmupTimer?.cancel();
     _eventsSubscription?.cancel();
+    _pendingScrubTimelineTimeUs = null;
+    _nativeScrubReady = false;
     if (_renderTargetAttached) {
       unawaited(
         _engineBridge.dispatch(
@@ -146,6 +144,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
       );
     }
     unawaited(_engineBridge.dispose());
+    _previewTimelineTimeUs.dispose();
     _assetLibrary.dispose();
     super.dispose();
   }
@@ -199,9 +198,16 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     switch (event.type) {
       case FusionXEngineEventType.ready:
         setState(() {
+          final textureId =
+              (event.payload['textureId'] as num?)?.toInt() ?? _textureId;
+          _textureId = textureId;
           if (_playbackStatus == FusionXTransportState.idle.name) {
             _playbackStatus = FusionXTransportState.ready.name;
           }
+        });
+      case FusionXEngineEventType.previewTargetChanged:
+        setState(() {
+          _textureId = (event.payload['textureId'] as num?)?.toInt() ?? _textureId;
         });
       case FusionXEngineEventType.durationResolved:
         final sourceDurationUs =
@@ -229,28 +235,32 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
           _tracks = _buildPhaseOneTracks();
           _selectedClipId = _hasClip ? _primaryClipId : null;
         });
-        _scheduleScrubPreviewWarmup();
+        _previewTimelineTimeUs.value = 0;
       case FusionXEngineEventType.positionChanged:
         final sourceTimeUs =
             (event.payload['sourceTimeUs'] as num?)?.toInt() ?? _sourceTimeUs;
         final timelineTimeUs =
             (event.payload['timelineTimeUs'] as num?)?.toInt() ?? 0;
+        final canAcceptTimelineUpdate = !_isTimelineScrubbing &&
+            (!_isTimelineScrubSettling ||
+                (timelineTimeUs - _timelineTimeUs).abs() <=
+                    _scrubSettleToleranceUs);
         setState(() {
           _sourceTimeUs = sourceTimeUs;
-          if (!_isTimelineScrubbing) {
+          if (canAcceptTimelineUpdate) {
             _timelineTimeUs = timelineTimeUs;
-            _showScrubPreviewOverlay = false;
-            _activeScrubPreviewFrame = null;
+          }
+          if (_isTimelineScrubSettling && canAcceptTimelineUpdate) {
+            _isTimelineScrubSettling = false;
           }
         });
+        if (canAcceptTimelineUpdate) {
+          _previewTimelineTimeUs.value = timelineTimeUs;
+        }
       case FusionXEngineEventType.playbackStateChanged:
         final state = event.payload['state'] as String? ?? _playbackStatus;
         setState(() {
           _playbackStatus = state;
-          if (state == FusionXTransportState.playing.name) {
-            _showScrubPreviewOverlay = false;
-            _activeScrubPreviewFrame = null;
-          }
         });
       case FusionXEngineEventType.firstFrameRendered:
         setState(() {
@@ -271,6 +281,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
           _tracks = _buildPhaseOneTracks();
           _selectedClipId = _hasClip ? _primaryClipId : null;
         });
+        _previewTimelineTimeUs.value = 0;
       case FusionXEngineEventType.error:
         setState(() {
           _playbackStatus = FusionXTransportState.error.name;
@@ -605,11 +616,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
       _trimEndUs = knownDurationUs;
       _sourceTimeUs = 0;
       _timelineTimeUs = 0;
-      _showScrubPreviewOverlay = false;
-      _activeScrubPreviewFrame = null;
-      _scrubPreviewFrames = const <_ScrubPreviewFrame>[];
-      _scrubPreviewCacheKey = null;
-      _scrubPreviewCacheLoading = false;
+      _nativeScrubReady = false;
       if (asset.width != null && asset.height != null && asset.height! > 0) {
         _projectWidth = asset.width!;
         _projectHeight = asset.height!;
@@ -619,6 +626,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
       }
       _tracks = _buildPhaseOneTracks();
     });
+    _previewTimelineTimeUs.value = 0;
 
     await _engineBridge.dispatch(
       FusionXEngineCommand(
@@ -632,13 +640,11 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     if (!_hasClip || !_canUseNativePlayback) {
       return;
     }
-    if (!_isPlaying) {
-      _scrubPreviewWarmupTimer?.cancel();
+    if (_isTimelineScrubSettling) {
+      await _completeTimelineScrub();
     }
-    setState(() {
-      _showScrubPreviewOverlay = false;
-      _activeScrubPreviewFrame = null;
-    });
+    await _flushPendingScrubDispatches();
+    setState(() {});
     await _engineBridge.dispatch(
       FusionXEngineCommand(
         type: _isPlaying
@@ -648,28 +654,147 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     );
   }
 
+  Future<void> _beginNativeScrub() async {
+    if (!_hasClip || !_canUseNativePlayback) {
+      return;
+    }
+    if (_nativeScrubReady) {
+      return;
+    }
+    if (_isPlaying) {
+      await _engineBridge.dispatch(const FusionXEngineCommand(
+        type: FusionXEngineCommandType.pause,
+      ));
+    }
+    await _engineBridge.dispatch(const FusionXEngineCommand(
+      type: FusionXEngineCommandType.beginScrub,
+    ));
+    _nativeScrubReady = true;
+    if (_pendingScrubTimelineTimeUs != null && _scrubDispatchLoop == null) {
+      _scrubDispatchLoop = _drainScrubDispatchLoop();
+    }
+  }
+
+  Future<void> _endNativeScrub() async {
+    if (!_hasClip || !_canUseNativePlayback) {
+      return;
+    }
+    _queueScrubDispatch(_timelineTimeUs);
+    await _flushPendingScrubDispatches();
+    await _engineBridge.dispatch(
+      FusionXEngineCommand(
+        type: FusionXEngineCommandType.endScrub,
+        payload: EndScrubPayload(
+          timelineTime: EngineTime.fromMicroseconds(_timelineTimeUs),
+        ).toMap(),
+      ),
+    );
+    _nativeScrubReady = false;
+  }
+
+  Future<void> _completeTimelineScrub() async {
+    final activeTask = _timelineScrubCompletionTask;
+    if (activeTask != null) {
+      await activeTask;
+      return;
+    }
+    final task = _completeTimelineScrubInternal();
+    _timelineScrubCompletionTask = task;
+    try {
+      await task;
+    } finally {
+      if (identical(_timelineScrubCompletionTask, task)) {
+        _timelineScrubCompletionTask = null;
+      }
+    }
+  }
+
+  Future<void> _completeTimelineScrubInternal() async {
+    try {
+      await _endNativeScrub();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTimelineScrubSettling = false;
+        });
+        _previewTimelineTimeUs.value = _timelineTimeUs;
+      }
+    }
+  }
+
+  void _queueScrubDispatch(int timelineTimeUs) {
+    _pendingScrubTimelineTimeUs = timelineTimeUs;
+    if (!_nativeScrubReady) {
+      return;
+    }
+    _scrubDispatchLoop ??= _drainScrubDispatchLoop();
+  }
+
+  Future<void> _flushPendingScrubDispatches() async {
+    while (true) {
+      final activeLoop = _scrubDispatchLoop;
+      if (activeLoop == null) {
+        return;
+      }
+      await activeLoop;
+    }
+  }
+
+  Future<void> _drainScrubDispatchLoop() async {
+    try {
+      while (mounted) {
+        final nextTimelineTimeUs = _pendingScrubTimelineTimeUs;
+        if (nextTimelineTimeUs == null) {
+          break;
+        }
+        _pendingScrubTimelineTimeUs = null;
+        await _engineBridge.dispatch(
+          FusionXEngineCommand(
+            type: FusionXEngineCommandType.scrubTo,
+            payload: SeekToPayload(
+              timelineTime: EngineTime.fromMicroseconds(nextTimelineTimeUs),
+            ).toMap(),
+          ),
+        );
+      }
+    } on MissingPluginException {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _engineAvailable = false;
+        _playbackStatus = FusionXTransportState.error.name;
+        _lastError = 'Native playback bridge is unavailable in this build.';
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _playbackStatus = FusionXTransportState.error.name;
+        _lastError = error.message ?? 'Unable to scrub the current clip.';
+      });
+    } finally {
+      _scrubDispatchLoop = null;
+      if (mounted && _pendingScrubTimelineTimeUs != null) {
+        _scrubDispatchLoop = _drainScrubDispatchLoop();
+      }
+    }
+  }
+
   void _setCurrentSeconds(double seconds) {
     final clampedSeconds = seconds.clamp(0.0, _timelineDuration).toDouble();
     final timelineTimeUs = (clampedSeconds * 1000000).round();
-    final previewFrame = _isTimelineScrubbing
-        ? _resolveScrubPreviewFrame(timelineTimeUs)
-        : null;
-    setState(() {
-      _timelineTimeUs = timelineTimeUs;
-      if (_isTimelineScrubbing && previewFrame != null) {
-        _activeScrubPreviewFrame = previewFrame;
-        _showScrubPreviewOverlay = true;
-      }
-    });
+    _timelineTimeUs = timelineTimeUs;
+    _previewTimelineTimeUs.value = timelineTimeUs;
     if (!_hasClip || !_canUseNativePlayback) {
       return;
     }
     if (_isTimelineScrubbing) {
-      if (previewFrame == null) {
-        _scheduleScrubPreviewWarmup(immediate: true);
-      }
+      _queueScrubDispatch(timelineTimeUs);
       return;
     }
+    setState(() {});
     unawaited(
       _engineBridge.dispatch(
         FusionXEngineCommand(
@@ -689,193 +814,21 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     setState(() {
       _isTimelineScrubbing = isScrubbing;
       if (isScrubbing) {
-        final previewFrame = _resolveScrubPreviewFrame(_timelineTimeUs);
-        if (previewFrame != null) {
-          _activeScrubPreviewFrame = previewFrame;
-          _showScrubPreviewOverlay = true;
-        }
-      } else {
-        _showScrubPreviewOverlay = false;
-        _activeScrubPreviewFrame = null;
+        _isTimelineScrubSettling = false;
+      } else if (_hasClip && _canUseNativePlayback) {
+        _isTimelineScrubSettling = true;
       }
     });
+    if (!isScrubbing) {
+      _previewTimelineTimeUs.value = _timelineTimeUs;
+      if (_hasClip && _canUseNativePlayback) {
+        unawaited(_completeTimelineScrub());
+      }
+    }
     if (isScrubbing) {
-      if (_isPlaying) {
-        unawaited(_engineBridge.dispatch(const FusionXEngineCommand(
-          type: FusionXEngineCommandType.pause,
-        )));
-      }
-      _scheduleScrubPreviewWarmup(immediate: true);
+      unawaited(_beginNativeScrub());
       return;
     }
-    if (!_hasClip || !_canUseNativePlayback) {
-      return;
-    }
-    unawaited(
-      _engineBridge.dispatch(
-        FusionXEngineCommand(
-          type: FusionXEngineCommandType.seekTo,
-          payload: SeekToPayload(
-            timelineTime: EngineTime.fromMicroseconds(_timelineTimeUs),
-          ).toMap(),
-        ),
-      ),
-    );
-  }
-
-  void _scheduleScrubPreviewWarmup({bool immediate = false}) {
-    _scrubPreviewWarmupTimer?.cancel();
-    if (immediate) {
-      unawaited(_ensureScrubPreviewCache());
-      return;
-    }
-    _scrubPreviewWarmupTimer = Timer(
-      const Duration(milliseconds: 320),
-      () {
-        unawaited(_ensureScrubPreviewCache());
-      },
-    );
-  }
-
-  Future<void> _ensureScrubPreviewCache() async {
-    final selectedAsset = _selectedAsset;
-    final assetPath = selectedAsset?.localPath;
-    if (selectedAsset == null ||
-        selectedAsset.tab != EditorMediaTab.video ||
-        assetPath == null ||
-        assetPath.isEmpty ||
-        _sourceDurationUs <= 0) {
-      return;
-    }
-    if (_isPlaying) {
-      return;
-    }
-
-    final cacheKey = [
-      assetPath,
-      _sourceDurationUs,
-      _projectWidth,
-      _projectHeight,
-    ].join('|');
-    if (_scrubPreviewCacheKey == cacheKey &&
-        (_scrubPreviewFrames.isNotEmpty || _scrubPreviewCacheLoading)) {
-      return;
-    }
-
-    final requestToken = ++_scrubPreviewRequestToken;
-    final timestampsUs = _buildScrubPreviewTimestampsUs(_sourceDurationUs);
-    if (timestampsUs.isEmpty) {
-      return;
-    }
-
-    setState(() {
-      _scrubPreviewCacheKey = cacheKey;
-      _scrubPreviewCacheLoading = true;
-      _scrubPreviewFrames = const <_ScrubPreviewFrame>[];
-    });
-
-    try {
-      final thumbnails = await NativeMediaThumbnailer.generateVideoThumbnails(
-        path: assetPath,
-        timestampsSeconds: <double>[
-          for (final timestampUs in timestampsUs) timestampUs / 1000000,
-        ],
-        targetWidth: _scrubPreviewTargetWidth,
-        targetHeight: _scrubPreviewTargetHeight,
-      );
-      if (!mounted ||
-          requestToken != _scrubPreviewRequestToken ||
-          _scrubPreviewCacheKey != cacheKey) {
-        return;
-      }
-
-      final resolvedCount = math.min(timestampsUs.length, thumbnails.length);
-      final frames = <_ScrubPreviewFrame>[
-        for (var index = 0; index < resolvedCount; index++)
-          _ScrubPreviewFrame(
-            sourceTimeUs: timestampsUs[index],
-            imageProvider: MemoryImage(thumbnails[index]),
-          ),
-      ];
-
-      setState(() {
-        _scrubPreviewFrames = List<_ScrubPreviewFrame>.unmodifiable(frames);
-        _scrubPreviewCacheLoading = false;
-      });
-      for (final frame in frames.take(18)) {
-        unawaited(precacheImage(frame.imageProvider, context));
-      }
-    } on MissingPluginException {
-      if (!mounted || requestToken != _scrubPreviewRequestToken) {
-        return;
-      }
-      setState(() {
-        _scrubPreviewCacheLoading = false;
-      });
-    } on PlatformException {
-      if (!mounted || requestToken != _scrubPreviewRequestToken) {
-        return;
-      }
-      setState(() {
-        _scrubPreviewCacheLoading = false;
-      });
-    }
-  }
-
-  List<int> _buildScrubPreviewTimestampsUs(int sourceDurationUs) {
-    if (sourceDurationUs <= 0) {
-      return const <int>[];
-    }
-
-    final durationSeconds = sourceDurationUs / 1000000;
-    final sampleCount =
-        math.min(240, math.max(48, (durationSeconds * 15).round()));
-    if (sampleCount <= 1) {
-      return <int>[0, sourceDurationUs];
-    }
-
-    final stepUs = sourceDurationUs / (sampleCount - 1);
-    return List<int>.generate(sampleCount, (index) {
-      final timestampUs = (stepUs * index).round();
-      return timestampUs.clamp(0, sourceDurationUs).toInt();
-    }, growable: false);
-  }
-
-  int get _scrubPreviewTargetWidth {
-    final safeWidth = _projectWidth <= 0 ? _defaultProjectWidth : _projectWidth;
-    final safeHeight =
-        _projectHeight <= 0 ? _defaultProjectHeight : _projectHeight;
-    final maxEdge = math.max(safeWidth, safeHeight);
-    final scale = maxEdge > 220 ? 220 / maxEdge : 1.0;
-    return math.max(120, (safeWidth * scale).round());
-  }
-
-  int get _scrubPreviewTargetHeight {
-    final safeWidth = _projectWidth <= 0 ? _defaultProjectWidth : _projectWidth;
-    final safeHeight =
-        _projectHeight <= 0 ? _defaultProjectHeight : _projectHeight;
-    final maxEdge = math.max(safeWidth, safeHeight);
-    final scale = maxEdge > 220 ? 220 / maxEdge : 1.0;
-    return math.max(120, (safeHeight * scale).round());
-  }
-
-  _ScrubPreviewFrame? _resolveScrubPreviewFrame(int timelineTimeUs) {
-    final previewFrames = _scrubPreviewFrames;
-    if (previewFrames.isEmpty) {
-      return null;
-    }
-    final targetSourceUs =
-        (_trimStartUs + timelineTimeUs).clamp(_trimStartUs, _trimEndUs).toInt();
-    _ScrubPreviewFrame? nearestFrame;
-    var nearestDistance = 1 << 62;
-    for (final frame in previewFrames) {
-      final distance = (frame.sourceTimeUs - targetSourceUs).abs();
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestFrame = frame;
-      }
-    }
-    return nearestFrame;
   }
 
   void _selectClip(String clipId) {
@@ -1006,7 +959,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                     child: _CleanPreviewCanvas(
                       asset: selectedAsset,
                       textureId: _textureId,
-                      currentSeconds: _currentSeconds,
+                      currentSecondsListenable: _previewTimelineTimeUs,
                       isAndroidFoundationSupported:
                           _isAndroidFoundationSupported,
                       renderTargetAttached: _renderTargetAttached,
@@ -1014,8 +967,6 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                       hasClip: _hasClip,
                       playbackStatus: _playbackStatus,
                       firstFrameRendered: _firstFrameRendered,
-                      scrubPreviewFrame: _activeScrubPreviewFrame,
-                      showScrubPreviewOverlay: _showScrubPreviewOverlay,
                       lastError: _lastError,
                     ),
                   ),
@@ -1065,7 +1016,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                           child: TimelinePanel(
                             embedded: true,
                             tracks: _tracks,
-                            currentSeconds: _currentSeconds,
+                            currentTimeUsListenable: _previewTimelineTimeUs,
                             timelineDuration: _timelineDuration,
                             isPlaying: _isPlaying,
                             selectedClipId: _selectedClipId,
@@ -1111,29 +1062,25 @@ class _CleanPreviewCanvas extends StatelessWidget {
   const _CleanPreviewCanvas({
     required this.asset,
     required this.textureId,
-    required this.currentSeconds,
+    required this.currentSecondsListenable,
     required this.isAndroidFoundationSupported,
     required this.renderTargetAttached,
     required this.engineAvailable,
     required this.hasClip,
     required this.playbackStatus,
     required this.firstFrameRendered,
-    required this.scrubPreviewFrame,
-    required this.showScrubPreviewOverlay,
     required this.lastError,
   });
 
   final MockAssetItem? asset;
   final int? textureId;
-  final double currentSeconds;
+  final ValueListenable<int> currentSecondsListenable;
   final bool isAndroidFoundationSupported;
   final bool renderTargetAttached;
   final bool engineAvailable;
   final bool hasClip;
   final String playbackStatus;
   final bool firstFrameRendered;
-  final _ScrubPreviewFrame? scrubPreviewFrame;
-  final bool showScrubPreviewOverlay;
   final String? lastError;
 
   @override
@@ -1155,16 +1102,6 @@ class _CleanPreviewCanvas extends StatelessWidget {
           children: [
             if (textureId != null && textureId! >= 0 && hasClip)
               Texture(textureId: textureId!),
-            if (showScrubPreviewOverlay && scrubPreviewFrame != null && hasClip)
-              ColoredBox(
-                color: Colors.black,
-                child: Image(
-                  image: scrubPreviewFrame!.imageProvider,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  filterQuality: FilterQuality.low,
-                ),
-              ),
             if (!hasClip || !firstFrameRendered)
               _CanvasMessage(
                 title: _title,
@@ -1200,28 +1137,34 @@ class _CleanPreviewCanvas extends StatelessWidget {
               left: 16,
               right: 16,
               bottom: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Time ${currentSeconds.toStringAsFixed(2)}s',
-                    style: const TextStyle(
-                      color: FxPalette.textPrimary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    playbackStatus,
-                    style: const TextStyle(
-                      color: FxPalette.textMuted,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
+              child: ValueListenableBuilder<int>(
+                valueListenable: currentSecondsListenable,
+                builder: (context, currentTimeUs, _) {
+                  final currentSeconds = currentTimeUs / 1000000;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Time ${currentSeconds.toStringAsFixed(2)}s',
+                        style: const TextStyle(
+                          color: FxPalette.textPrimary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        playbackStatus,
+                        style: const TextStyle(
+                          color: FxPalette.textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -1262,16 +1205,6 @@ class _CleanPreviewCanvas extends StatelessWidget {
     }
     return 'The selected clip is being prepared inside the native preview pipeline.';
   }
-}
-
-class _ScrubPreviewFrame {
-  const _ScrubPreviewFrame({
-    required this.sourceTimeUs,
-    required this.imageProvider,
-  });
-
-  final int sourceTimeUs;
-  final MemoryImage imageProvider;
 }
 
 class _CanvasMessage extends StatelessWidget {

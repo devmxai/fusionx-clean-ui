@@ -93,11 +93,13 @@ class FusionXTransport(
         }
     }
 
-    fun setSourcePositionUs(sourceTimeUs: Long) {
+    fun setSourcePositionUs(sourceTimeUs: Long, emitEvent: Boolean = true) {
         synchronized(lock) {
             currentSourceTimeUs = clampSourceTimeUsLocked(sourceTimeUs)
         }
-        emitPositionChanged()
+        if (emitEvent) {
+            emitPositionChanged()
+        }
     }
 
     fun setTrimWindow(trimStartUs: Long, trimEndUs: Long) {

@@ -15,6 +15,7 @@ class FusionXEnginePlugin(
     textureRegistry: TextureRegistry,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val vulkanBridge = FusionXVulkanBridge()
     private val controller = FusionXEngineController(
         applicationContext = applicationContext,
         textureRegistry = textureRegistry,
@@ -54,6 +55,17 @@ class FusionXEnginePlugin(
                     val path = call.argument<String>("path")
                         ?: throw IllegalArgumentException("Missing local clip path.")
                     controller.loadClip(path)
+                    result.success(null)
+                }
+
+                "beginScrub" -> {
+                    controller.beginScrub()
+                    result.success(null)
+                }
+
+                "endScrub" -> {
+                    val timelineTimeUs = call.argument<Number>("timelineTimeUs")?.toLong()
+                    controller.endScrub(timelineTimeUs)
                     result.success(null)
                 }
 
@@ -108,9 +120,15 @@ class FusionXEnginePlugin(
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         eventSink = events
+        val vulkanCapabilities = vulkanBridge.queryCapabilities()
         emitEvent(
             type = "ready",
-            payload = mapOf("phase" to "native_single_clip_playback_foundation"),
+            payload = mapOf(
+                "phase" to "vulkan_phase0_bootstrap",
+                "legacyPlaybackFoundationActive" to true,
+                "targetRenderer" to "android_vulkan",
+                "vulkan" to vulkanCapabilities.toMap(),
+            ),
         )
     }
 

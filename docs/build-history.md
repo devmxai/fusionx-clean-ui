@@ -10,6 +10,450 @@
 
 ## Releases
 
+### V31
+
+- APK name:
+  - `Fusion X V31 - Proxy Scrub Foundation.apk`
+- Milestone label:
+  - `Beta 1`
+- Shorthand:
+  - `PSF + M3H + SDK21 + RLS`
+- Meaning:
+  - `PSF` = proxy scrub foundation
+  - `M3H` = Media3 helper conformer
+  - `SDK21` = Android minSdk raised to 21
+  - `RLS` = release APK build
+- Notes:
+  - added `FusionXProxyConformer` to generate a low-resolution H.264 proxy clip
+    in app cache for scrub, instead of relying only on exact-source decode
+    from the original compressed clip
+  - rewired `FusionXScrubSession` to prepare a dedicated native proxy scrub
+    lane backed by `FusionXDecoderSession`, while source playback and exact
+    end-of-scrub resolve stay on the original playback session
+  - `FusionXEngineController` now routes `scrubTo` to the proxy lane when it
+    is ready and falls back to the old decoder scrub path only if the proxy is
+    not prepared yet
+  - raised Android `minSdkVersion` to 21 because the current helper conformer
+    stack requires it in this project
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `./gradlew --no-daemon app:assembleRelease --stacktrace` passed
+  - real-device validation is still required to judge whether the new proxy
+    scrub lane materially improves live scrub smoothness and proportionality
+    under the finger
+  - this version is now treated as the first good beta baseline for continuing
+    the engine roadmap
+
+### V30
+
+- APK name:
+  - `Fusion X V30 - Anchored Scrub Stability.apk`
+- Shorthand:
+  - `ASB + GOP + RLS`
+- Meaning:
+  - `ASB` = anchored scrub behavior
+  - `GOP` = wider GOP continuation handling
+  - `RLS` = release APK build
+- Notes:
+  - timeline scrubbing now uses an anchored pointer position instead of
+    accumulating per-move deltas, which makes the scrub path steadier under the
+    finger
+  - the decoder scrub continuation window was widened again so scrubbing can
+    continue farther through the same compressed segment instead of collapsing
+    near the early keyframe/GOP boundary
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - release APK built successfully via `./gradlew --no-daemon app:assembleRelease`
+
+### V29
+
+- APK name:
+  - `Fusion X V29 - Target Locked Scrub Tracking.apk`
+- Shorthand:
+  - `TLS + NAR + RLS`
+- Meaning:
+  - `TLS` = target-locked scrub
+  - `NAR` = narrower active render window
+  - `RLS` = release APK build
+- Notes:
+  - the active decoder scrub path now renders progressive frames only when they
+    are close to the current target instead of showing older chase frames from
+    farther back in the GOP
+  - the forward continuation window was reduced so larger scrubs re-prepare
+    sooner instead of dragging stale decoder state too far forward
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - release APK built successfully via `./gradlew --no-daemon app:assembleRelease`
+
+### V28
+
+- APK name:
+  - `Fusion X V28 - Flutter Texture Ownership Fix.apk`
+- Shorthand:
+  - `TEX + RGR + RLS`
+- Meaning:
+  - `TEX` = texture ownership restored
+  - `RGR` = render regression rollback
+  - `RLS` = release APK build
+- Notes:
+  - removed the custom `SurfaceTexture` frame listener that was interfering with
+    Flutter texture presentation and causing black preview playback
+  - restored Flutter ownership of the preview texture while keeping the newer
+    decoder scrub gating logic in place
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - release APK built successfully via `./gradlew --no-daemon app:assembleRelease`
+
+### V27
+
+- APK name:
+  - `Fusion X V27 - Surface Sync Scrub Pacing.apk`
+- Shorthand:
+  - `SFS + TGP + RLS`
+- Meaning:
+  - `SFS` = surface frame synchronization
+  - `TGP` = target-gated progressive scrub
+  - `RLS` = release APK build
+- Notes:
+  - the decoder scrub path now waits for the preview surface to acknowledge a
+    new frame before racing ahead to the next progressive output
+  - progressive scrub rendering no longer starts immediately from the GOP sync
+    frame after a decoder re-prepare; it stays focused near the requested
+    target window instead
+  - scrub fallback near end-of-stream now lands on the last decoded frame
+    instead of immediately re-preparing the decoder again
+  - `flutter analyze` passed
+  - `flutter test --no-version-check` passed
+  - release APK built successfully via `./gradlew --no-daemon app:assembleRelease`
+
+### V26
+
+- APK name:
+  - `Fusion X V26 - Progressive Decoder Scrub.apk`
+- Shorthand:
+  - `PDS + CFW + RLS`
+- Meaning:
+  - `PDS` = progressive decoder scrub
+  - `CFW` = continuation forward window
+  - `RLS` = release APK build
+- Notes:
+  - the decoder scrub path no longer waits only for the final target frame
+    before showing movement; it can now render progressive intermediate frames
+    while chasing the scrub target on the same preview surface
+  - increased the forward continuation window from `0.75s` to `3.0s` so
+    longer forward drags do not collapse into constant `seek + flush` as
+    quickly as before
+  - this specifically targets the behavior where the first small part of the
+    video scrubbed smoothly but movement froze after roughly the first second
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `flutter build apk --release` passed
+  - real-device validation is required to confirm whether scrub now keeps
+    moving past the first second instead of freezing after the initial window
+
+### V25
+
+- APK name:
+  - `Fusion X V25 - Phase 2 Single Surface Foundation.apk`
+- Shorthand:
+  - `P2S + SSD + RLS`
+- Meaning:
+  - `P2S` = phase 2 start
+  - `SSD` = single-surface decoder
+  - `RLS` = release APK build
+- Notes:
+  - retired the active dual-surface scrub path from `FusionXEngineController`
+    so scrubbing now stays on the same preview surface instead of switching to
+    a separate scrub texture
+  - active scrub commands now route through the decoder session's scrub path,
+    which becomes the temporary Phase 2 single-surface foundation while the
+    proxy scrub decoder is built next
+  - `FusionXPreviewCoordinator` is now effectively single-surface in the active
+    runtime, which removes preview texture switching from the visible scrub
+    path
+  - added decoder-side `stopAndDrainScrub()` so playback handoff can flush the
+    decoder scrub queue before `play`, `seek`, and `endScrub`
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `flutter build apk --release` passed
+  - real-device validation is required to compare this single-surface
+    foundation against the broken retriever/scrub-texture path it replaces
+
+### V24
+
+- APK name:
+  - `Fusion X V24 - Dense Bitmap Scrub Cache.apk`
+- Shorthand:
+  - `DBC + LSW + RLS`
+- Meaning:
+  - `DBC` = dense bitmap cache
+  - `LSW` = local scrub window
+  - `RLS` = release APK build
+- Notes:
+  - replaced the scrub session's JPEG byte cache with an in-memory bitmap cache
+    so scrub no longer compresses and decodes preview frames during movement
+  - scrub cache density is now local and much tighter around the finger target
+    instead of using a coarser cache spread across the whole clip
+  - priority warmup now follows the active scrub neighborhood rather than a
+    broad sequential sweep, which should make nearby forward/backward movement
+    more responsive
+  - scrub proxy frames are normalized once and retained in a lighter in-memory
+    config instead of being round-tripped through JPEG
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `flutter build apk --release` passed
+  - real-device validation is required to measure whether preview motion now
+    feels materially closer to proportional jog/shuttle behavior
+
+### V23
+
+- APK name:
+  - `Fusion X V23 - Explicit Scrub Commit Handoff.apk`
+- Shorthand:
+  - `SCH + ECS + RLS`
+- Meaning:
+  - `SCH` = scrub commit handoff
+  - `ECS` = explicit commit source
+  - `RLS` = release APK build
+- Notes:
+  - `endScrub` now commits the exact final timeline time coming from Flutter
+    instead of relying on whatever time the native transport last held
+  - the Android engine now tracks the latest requested scrub time and clears it
+    explicitly when control returns to playback
+  - this targets the case where scrub work is drained or cancelled before the
+    last requested position is fully reflected in transport state, which can
+    show up as jump-back or unstable final positioning
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `flutter build apk --release` passed
+  - real-device validation is required to confirm whether the final scrub
+    commit and timeline stability are now materially better
+
+### V22
+
+- APK name:
+  - `Fusion X V22 - Timeline Ownership Stabilization.apk`
+- Shorthand:
+  - `TOS + SHB + RLS`
+- Meaning:
+  - `TOS` = timeline ownership stabilization
+  - `SHB` = scrub handoff barrier
+  - `RLS` = release APK build
+- Notes:
+  - moved the timeline panel off screen rebuild timing and onto the same live
+    timeline time notifier used by the preview HUD
+  - local drag time now remains the authoritative visual time until scrub
+    commit finishes, instead of falling back early to a stale external time
+  - added a scrub-settle guard in the Flutter screen so delayed engine position
+    events do not yank the timeline backward during the release/commit window
+  - added `stopAndDrain()` to the Android scrub session and now stop scrub work
+    before handing control back to playback for `endScrub`, `play`, `seek`,
+    and `trim`
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `flutter build apk --release` completed and produced a new release APK
+  - real-device validation is required to confirm whether the unstable
+    timeline/time snap-back is resolved on hardware
+
+### V21
+
+- APK name:
+  - `Fusion X V21 - Vulkan Preview Session.apk`
+- Shorthand:
+  - `VKS + SUR + RLS`
+- Meaning:
+  - `VKS` = Vulkan preview session
+  - `SUR` = real surface attachment
+  - `RLS` = release APK build
+- Notes:
+  - added a real Vulkan renderer with swapchain creation against the app preview
+    `Surface`
+  - added `FusionXVulkanPreviewSession` so the engine can attach Vulkan to the
+    playback preview target before a clip is loaded
+  - Vulkan is no longer diagnostics-only; it now renders an actual idle frame
+    into the product preview surface
+  - loaded clip playback and scrub still remain on the legacy decoder path in
+    this phase
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `./gradlew --no-daemon app:assembleDebug` passed
+  - `./gradlew --no-daemon app:assembleRelease` passed
+
+### V20
+
+- APK name:
+  - `Fusion X V20 - Vulkan Phase 0 Bootstrap.apk`
+- Shorthand:
+  - `VK0 + JNI + RLS`
+- Meaning:
+  - `VK0` = Vulkan Phase 0
+  - `JNI` = native bridge bootstrap
+  - `RLS` = release APK build
+- Notes:
+  - added Android `externalNativeBuild` and a native C++ Vulkan bootstrap
+    library
+  - the Android engine plugin now queries Vulkan runtime capabilities from
+    native code on startup
+  - pinned the Android app to the locally available NDK `27.1.12297006` so the
+    new native pipeline builds consistently on this machine
+  - the current decoder preview backend remains active temporarily, but is now
+    officially treated as the legacy path while Vulkan becomes the target
+    renderer
+  - `flutter analyze` passed
+  - `flutter test` passed
+  - `./gradlew --no-daemon app:assembleDebug` passed
+  - `./gradlew --no-daemon app:assembleRelease` passed
+
+### V19
+
+- APK name:
+  - `Fusion X V19 - Scrub Proxy Architecture.apk`
+- Shorthand:
+  - `SPA + PWC + RLS`
+- Meaning:
+  - `SPA` = scrub proxy architecture
+  - `PWC` = proxy warm cache
+  - `RLS` = release APK build
+- Notes:
+  - kept the dedicated playback/scrub split from V17, but replaced the visible
+    live scrub implementation with a proxy-backed scrub session
+  - scrub now prewarms quantized preview buckets around the current source
+    position and keeps extending that cache in the background
+  - drag preview resolves the nearest ready proxy frame from native cache
+    instead of trying to build a fresh visible frame on every move
+  - playback and final exact resolve remain on the playback decoder session,
+    which keeps scrub preview and exact playback responsibilities separate
+  - release APK built successfully
+  - exact device validation is required to confirm whether this closes the
+    remaining lag during bidirectional scrub on hardware
+
+### V18
+
+- APK name:
+  - `Fusion X V18 - Scrub Target Regression Fix.apk`
+- Shorthand:
+  - `STR + DPG + RLS`
+- Meaning:
+  - `STR` = scrub target regression
+  - `DPG` = delayed preview gating
+  - `RLS` = release APK build
+- Notes:
+  - fixed the dedicated scrub regression where scrub preview could switch to a separate target before the first scrub frame was ready
+  - scrub preview now keeps playback visible until a real scrub frame has been rendered
+  - scrub target sizing now follows the clip display geometry instead of staying on the initial default buffer
+  - added rotation-aware scrub bitmap normalization to reduce the letterboxing/smaller-frame issue seen in V17
+  - release APK built successfully
+  - device validation is required to measure whether the V17 regression is resolved and whether scrub latency improved materially
+
+### V17
+
+- APK name:
+  - `Fusion X V17 - Dedicated Scrub Architecture.apk`
+- Shorthand:
+  - `DSA + SPC + RLS`
+- Meaning:
+  - `DSA` = dedicated scrub architecture
+  - `SPC` = split preview coordination
+  - `RLS` = release APK build
+- Notes:
+  - landed the first split between playback preview and scrub preview inside the Android engine
+  - added a native preview coordinator with separate playback and scrub render targets
+  - added explicit `beginScrub` and `endScrub` commands so scrub lifecycle is no longer inferred only from repeated `scrubTo`
+  - scrub preview now runs through a dedicated scrub session instead of sharing the playback-visible preview lane directly
+  - release APK built successfully
+  - device validation is required to measure whether the new architecture improves bidirectional scrub behavior materially
+
+### V16
+
+- APK name:
+  - `Fusion X V16 - Bidirectional Scrub Target Fix.apk`
+- Shorthand:
+  - `BST + SCC + RLS`
+- Meaning:
+  - `BST` = bidirectional scrub targets
+  - `SCC` = scrub command coalescing
+  - `RLS` = release APK build
+- Notes:
+  - removed the backward scrub tolerance in the decoder scrub path so reversing direction no longer reuses a later already-decoded frame during tiny backward moves
+  - the Flutter screen now coalesces `scrubTo` commands and keeps only the newest pending scrub target instead of flooding the Android main thread with stale method-channel calls
+  - `play` now waits for pending scrub dispatches to drain before sending the playback command, which should reduce lag caused by old scrub messages still queued ahead of `play`
+  - release APK built successfully
+  - device validation is required to measure how much this improves forward/backward touch tracking and play-start response on hardware
+
+### V15
+
+- APK name:
+  - `Fusion X V15 - Continuous Decoder Scrub.apk`
+- Shorthand:
+  - `CDS + DCR + RLS`
+- Meaning:
+  - `CDS` = continuous decoder scrub
+  - `DCR` = decoder continuation resume
+  - `RLS` = release APK build
+- Notes:
+  - scrub no longer treats every move as an isolated exact seek; it now keeps decoding forward within the same stream when the finger movement stays within a continuation window
+  - stale scrub targets can now trigger a reprepare only when the movement goes backward or jumps far enough forward, instead of forcing a full seek/flush for every small move
+  - decoder continuation state is now reused so `play` can start from the currently rendered frame without always rebuilding decoder state first
+  - release APK built successfully
+  - device validation is required to measure whether scrub latency and play-start latency improved materially on hardware
+
+### V14
+
+- APK name:
+  - `Fusion X V14 - Unified Decoder Scrub Path.apk`
+- Shorthand:
+  - `UDS + UTX + RLS`
+- Meaning:
+  - `UDS` = unified decoder scrub
+  - `UTX` = unified texture path
+  - `RLS` = release APK build
+- Notes:
+  - removed the `MediaMetadataRetriever -> Bitmap -> lockCanvas()` scrub path from the active engine
+  - live scrub now reuses the native decoder and the same preview texture instead of a separate CPU-rendered preview path
+  - the Flutter scrub overlay/cache path was removed so the preview stays on one visual pipeline only
+  - scrub requests now coalesce on the decoder executor and update native transport state without pushing a Flutter event on every scrub frame
+  - decoder configuration now opts into Android low-latency mode where supported
+  - release APK built successfully
+  - device validation is required to confirm whether this closes the real-time scrub issue on hardware
+
+### V13
+
+- APK name:
+  - `Fusion X V13 - Isolated Scrub Preview Updates.apk`
+- Shorthand:
+  - `ISP + TDP + RLS`
+- Meaning:
+  - `ISP` = isolated scrub preview
+  - `TDP` = timeline direct path
+  - `RLS` = release APK build
+- Notes:
+  - scrub preview updates now bypass full-screen `setState` and update through dedicated notifiers
+  - the preview overlay is no longer gated by parent widget rebuilds during drag
+  - timeline scrub dispatch now takes the direct path before epsilon filtering so tiny finger moves are not dropped while scrubbing
+  - the timeline clock display now follows internal scrub time during active drag
+  - release APK built successfully
+  - device validation is required to confirm whether the preview now tracks the finger in real time
+
+### V12
+
+- APK name:
+  - `Fusion X V12 - Playback Clock and Scrub Warmup.apk`
+- Shorthand:
+  - `PCK + SWP + RLS`
+- Meaning:
+  - `PCK` = playback clock
+  - `SWP` = scrub warmup priority
+  - `RLS` = release APK build
+- Notes:
+  - fixed the playback clock so the transport anchor starts from the first decoded output frame instead of assuming zero startup latency
+  - this removes the initial burst/catch-up behavior that could make the first moments of playback look too fast
+  - scrub cache generation now starts earlier and can complete even while playback is active
+  - Android media warmup now runs on background-priority worker threads to reduce contention with UI and playback
+  - if scrub cache finishes while the finger is still down, the preview overlay now appears immediately without waiting for another gesture step
+  - release APK built successfully
+  - device validation is still required for the live scrub issue
+
 ### V11
 
 - APK name:

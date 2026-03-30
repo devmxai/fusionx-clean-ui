@@ -103,7 +103,14 @@ class _NativeSingleClipPlaybackFoundationScreenState
     switch (event.type) {
       case FusionXEngineEventType.ready:
         setState(() {
+          _textureId =
+              (event.payload['textureId'] as num?)?.toInt() ?? _textureId;
           _status = 'ready';
+        });
+      case FusionXEngineEventType.previewTargetChanged:
+        setState(() {
+          _textureId =
+              (event.payload['textureId'] as num?)?.toInt() ?? _textureId;
         });
       case FusionXEngineEventType.durationResolved:
         final sourceDurationUs =

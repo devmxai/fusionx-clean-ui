@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.provider.MediaStore
 import android.util.Size
 import androidx.core.app.ActivityCompat
@@ -21,6 +22,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import kotlin.math.roundToLong
 
 class MainActivity : FlutterActivity() {
@@ -29,7 +31,18 @@ class MainActivity : FlutterActivity() {
     private var pendingMediaQueryResult: MethodChannel.Result? = null
     private var pendingMediaQueryTab: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val mediaExecutor = Executors.newFixedThreadPool(3)
+    private val mediaExecutor = Executors.newFixedThreadPool(
+        2,
+        ThreadFactory { runnable ->
+            Thread {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                runnable.run()
+            }.apply {
+                name = "fusionx-media-$id"
+                isDaemon = true
+            }
+        },
+    )
     private val mediaCache = mutableMapOf<String, List<Map<String, Any?>>>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

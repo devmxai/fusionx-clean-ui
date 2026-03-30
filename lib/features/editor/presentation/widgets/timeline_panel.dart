@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' show lerpDouble;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -22,7 +22,7 @@ class TimelinePanel extends StatefulWidget {
     super.key,
     this.embedded = false,
     required this.tracks,
-    required this.currentSeconds,
+    required this.currentTimeUsListenable,
     required this.timelineDuration,
     required this.isPlaying,
     required this.selectedClipId,
@@ -36,7 +36,7 @@ class TimelinePanel extends StatefulWidget {
 
   final bool embedded;
   final List<TimelineTrackData> tracks;
-  final double currentSeconds;
+  final ValueListenable<int> currentTimeUsListenable;
   final double timelineDuration;
   final bool isPlaying;
   final String? selectedClipId;
@@ -84,6 +84,8 @@ class _TimelinePanelState extends State<TimelinePanel> {
   bool _isScrubInteractionActive = false;
   final Set<int> _activePointers = <int>{};
   int? _primaryPointerId;
+  double? _scrubAnchorPointerX;
+  double _scrubAnchorSeconds = 0;
   double _rawScrubDx = 0;
   double _rawScrubDy = 0;
   bool _rawScrubLocked = false;
@@ -100,6 +102,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
   bool _isDropSettling = false;
   Timer? _reorderExitTimer;
   double _backgroundScrubCurrentSeconds = 0;
+  int _externalCurrentTimeUs = 0;
 
   bool get _isReorderMode =>
       _reorderTracksSnapshot != null &&
@@ -109,20 +112,29 @@ class _TimelinePanelState extends State<TimelinePanel> {
   @override
   void initState() {
     super.initState();
+    _externalCurrentTimeUs = widget.currentTimeUsListenable.value;
+    widget.currentTimeUsListenable.addListener(_handleExternalCurrentTimeChanged);
     _scrollController.addListener(_handleScroll);
   }
 
   @override
   void didUpdateWidget(covariant TimelinePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if ((oldWidget.currentSeconds - widget.currentSeconds).abs() > 0.001 ||
-        oldWidget.isPlaying != widget.isPlaying) {
+    if (oldWidget.currentTimeUsListenable != widget.currentTimeUsListenable) {
+      oldWidget.currentTimeUsListenable
+          .removeListener(_handleExternalCurrentTimeChanged);
+      _externalCurrentTimeUs = widget.currentTimeUsListenable.value;
+      widget.currentTimeUsListenable.addListener(_handleExternalCurrentTimeChanged);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _syncToTime());
+    } else if (oldWidget.isPlaying != widget.isPlaying) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncToTime());
     }
   }
 
   @override
   void dispose() {
+    widget.currentTimeUsListenable
+        .removeListener(_handleExternalCurrentTimeChanged);
     _scrollController.removeListener(_handleScroll);
     _scrollDispatchTimer?.cancel();
     _reorderExitTimer?.cancel();
@@ -131,12 +143,30 @@ class _TimelinePanelState extends State<TimelinePanel> {
     super.dispose();
   }
 
+  double get _externalCurrentSeconds => _externalCurrentTimeUs / 1000000;
+
+  void _handleExternalCurrentTimeChanged() {
+    final nextTimeUs = widget.currentTimeUsListenable.value;
+    if (nextTimeUs == _externalCurrentTimeUs) {
+      return;
+    }
+    _externalCurrentTimeUs = nextTimeUs;
+    if (!mounted) {
+      return;
+    }
+    if (_isBackgroundScrubbing) {
+      return;
+    }
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncToTime());
+  }
+
   void _handleScaleStart(ScaleStartDetails details) {
     if (_isReorderMode) {
       return;
     }
     _scaleStartSecondsWidth = _secondsWidth;
-    _scaleStartFocusTime = widget.currentSeconds;
+    _scaleStartFocusTime = _externalCurrentSeconds;
   }
 
   void _handleScaleUpdate(ScaleUpdateDetails details) {
@@ -202,17 +232,17 @@ class _TimelinePanelState extends State<TimelinePanel> {
   }
 
   void _dispatchTimelineSeconds(double nextSeconds) {
-    if ((nextSeconds - widget.currentSeconds).abs() <= 0.002 &&
-        _pendingSeconds == null) {
-      return;
-    }
-
     if (_isScrubInteractionActive || _isBackgroundScrubbing) {
       _scrollDispatchTimer?.cancel();
       _scrollDispatchTimer = null;
       _pendingSeconds = null;
       _lastDispatchedAt = DateTime.now();
       widget.onTimeChanged(nextSeconds);
+      return;
+    }
+
+    if ((nextSeconds - _externalCurrentSeconds).abs() <= 0.002 &&
+        _pendingSeconds == null) {
       return;
     }
 
@@ -245,21 +275,28 @@ class _TimelinePanelState extends State<TimelinePanel> {
     if (_isBackgroundScrubbing) {
       return;
     }
-    _backgroundScrubCurrentSeconds = widget.currentSeconds;
-    _isBackgroundScrubbing = true;
+    setState(() {
+      _backgroundScrubCurrentSeconds = _externalCurrentSeconds;
+      _isBackgroundScrubbing = true;
+    });
+    _scrubAnchorSeconds = _externalCurrentSeconds;
     _setScrubInteractionActive(true);
   }
 
-  void _updateBackgroundScrub(double deltaDx) {
+  void _updateBackgroundScrub(PointerMoveEvent event) {
     if (_isReorderMode || !_isBackgroundScrubbing) {
       return;
     }
+    final anchorX = _scrubAnchorPointerX ?? event.localPosition.dx;
+    final pointerDeltaDx = event.localPosition.dx - anchorX;
 
     final nextSeconds =
-        (_backgroundScrubCurrentSeconds - (deltaDx / _secondsWidth))
+        (_scrubAnchorSeconds - (pointerDeltaDx / _secondsWidth))
             .clamp(0.0, widget.timelineDuration)
             .toDouble();
-    _backgroundScrubCurrentSeconds = nextSeconds;
+    setState(() {
+      _backgroundScrubCurrentSeconds = nextSeconds;
+    });
 
     if (_scrollController.hasClients) {
       final targetOffset = (nextSeconds * _secondsWidth)
@@ -277,7 +314,9 @@ class _TimelinePanelState extends State<TimelinePanel> {
     if (!_isBackgroundScrubbing) {
       return;
     }
-    _isBackgroundScrubbing = false;
+    setState(() {
+      _isBackgroundScrubbing = false;
+    });
     _flushPendingScrollSeconds();
     _setScrubInteractionActive(_isScrollActive);
   }
@@ -296,6 +335,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
       return;
     }
     _primaryPointerId = event.pointer;
+    _scrubAnchorPointerX = event.localPosition.dx;
     _rawScrubDx = 0;
     _rawScrubDy = 0;
     _rawScrubLocked = false;
@@ -322,7 +362,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
       _beginBackgroundScrub();
     }
 
-    _updateBackgroundScrub(event.delta.dx);
+    _updateBackgroundScrub(event);
   }
 
   void _handlePointerEnd(int pointer) {
@@ -331,6 +371,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
       return;
     }
     _primaryPointerId = null;
+    _scrubAnchorPointerX = null;
     _rawScrubDx = 0;
     _rawScrubDy = 0;
     _rawScrubLocked = false;
@@ -344,7 +385,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
       return;
     }
 
-    final target = (widget.currentSeconds * _secondsWidth)
+    final target = (_externalCurrentSeconds * _secondsWidth)
         .clamp(0, _scrollController.position.maxScrollExtent)
         .toDouble();
 
@@ -620,6 +661,13 @@ class _TimelinePanelState extends State<TimelinePanel> {
     return '00:$seconds';
   }
 
+  double get _displayedCurrentSeconds {
+    if (_isBackgroundScrubbing) {
+      return _backgroundScrubCurrentSeconds;
+    }
+    return _externalCurrentSeconds;
+  }
+
   double _buildContentWidth(double trailingPadding) {
     final farthest = widget.tracks.fold<double>(
       0,
@@ -829,7 +877,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
                           SizedBox(
                             width: _timeReadoutWidth,
                             child: Text(
-                              '${_formatClock(widget.currentSeconds)} / ${_formatWholeSeconds(widget.timelineDuration)}',
+                              '${_formatClock(_displayedCurrentSeconds)} / ${_formatWholeSeconds(widget.timelineDuration)}',
                               maxLines: 1,
                               overflow: TextOverflow.clip,
                               style: const TextStyle(
