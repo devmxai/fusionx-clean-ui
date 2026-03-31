@@ -1,6 +1,8 @@
 package com.fusionx.fusionx_clean_ui.engine
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import io.flutter.view.TextureRegistry
 
 class FusionXEngineController(
@@ -10,14 +12,15 @@ class FusionXEngineController(
 ) {
     private val lock = Any()
     private val transport = FusionXTransport(events)
-    private val vulkanBridge = FusionXVulkanBridge()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var previewCoordinator: FusionXPreviewCoordinator? = null
     private var playbackSession: FusionXDecoderSession? = null
     private var scrubSession: FusionXScrubSession? = null
-    private var vulkanPreviewSession: FusionXVulkanPreviewSession? = null
     private var scrubModeActive = false
     private var lastRequestedScrubTimelineTimeUs: Long? = null
+    private var clipLoadGeneration = 0L
+    private var pendingScrubPrepareRunnable: Runnable? = null
 
     fun attachRenderTarget(width: Int, height: Int): Long {
         synchronized(lock) {
@@ -36,13 +39,6 @@ class FusionXEngineController(
                     "previewMode" to "playback",
                 ),
             )
-            vulkanPreviewSession = FusionXVulkanPreviewSession(
-                renderTarget = nextPreviewCoordinator.playbackTarget(),
-                bridge = vulkanBridge,
-                events = events,
-            ).also { previewSession ->
-                previewSession.start()
-            }
             return nextPreviewCoordinator.activeTextureId()
         }
     }
@@ -58,10 +54,14 @@ class FusionXEngineController(
             previewCoordinator
                 ?: throw IllegalStateException("Attach a render target before loading a clip.")
         }
+        val scrubTargetWidth = activePreviewCoordinator.scrubTarget().width
+        val scrubTargetHeight = activePreviewCoordinator.scrubTarget().height
 
         synchronized(lock) {
-            vulkanPreviewSession?.release()
-            vulkanPreviewSession = null
+            clipLoadGeneration += 1L
+            val generation = clipLoadGeneration
+            pendingScrubPrepareRunnable?.let(mainHandler::removeCallbacks)
+            pendingScrubPrepareRunnable = null
             scrubSession?.release()
             scrubSession = null
             playbackSession?.release()
@@ -70,6 +70,11 @@ class FusionXEngineController(
                 renderTarget = activePreviewCoordinator.playbackTarget(),
                 transport = transport,
                 events = events,
+                onClipPrepared = {
+                    scheduleScrubPreparation(
+                        generation = generation,
+                    )
+                },
             )
             scrubSession = FusionXScrubSession(
                 applicationContext = applicationContext,
@@ -77,14 +82,15 @@ class FusionXEngineController(
                 transport = transport,
                 events = events,
             )
+            scrubSession?.loadClip(
+                path = path,
+                sourceWidth = scrubTargetWidth,
+                sourceHeight = scrubTargetHeight,
+            )
             scrubModeActive = false
             activePreviewCoordinator.activatePlayback()
             playbackSession?.loadClip(path)
-            scrubSession?.loadClip(
-                path = path,
-                sourceWidth = activePreviewCoordinator.scrubTarget().width,
-                sourceHeight = activePreviewCoordinator.scrubTarget().height,
-            )
+            generation
         }
     }
 
@@ -200,6 +206,8 @@ class FusionXEngineController(
 
     fun dispose() {
         synchronized(lock) {
+            pendingScrubPrepareRunnable?.let(mainHandler::removeCallbacks)
+            pendingScrubPrepareRunnable = null
             scrubSession?.release()
             scrubSession = null
             playbackSession?.release()
@@ -208,9 +216,43 @@ class FusionXEngineController(
         }
     }
 
+    private fun scheduleScrubPreparation(generation: Long) {
+        var prepareRunnable: Runnable? = null
+        prepareRunnable = Runnable {
+            val activeScrubSession = synchronized(lock) {
+                if (clipLoadGeneration != generation) {
+                    if (pendingScrubPrepareRunnable === prepareRunnable) {
+                        pendingScrubPrepareRunnable = null
+                    }
+                    null
+                } else {
+                    if (pendingScrubPrepareRunnable === prepareRunnable) {
+                        pendingScrubPrepareRunnable = null
+                    }
+                    scrubSession
+                }
+            } ?: return@Runnable
+            activeScrubSession.prepareProxyIfNeeded()
+        }
+
+        synchronized(lock) {
+            if (clipLoadGeneration != generation) {
+                return
+            }
+            pendingScrubPrepareRunnable?.let(mainHandler::removeCallbacks)
+            pendingScrubPrepareRunnable = prepareRunnable
+        }
+        val scheduledRunnable = prepareRunnable ?: return
+        if (SCRUB_PREPARE_DELAY_MS <= 0L) {
+            mainHandler.post(scheduledRunnable)
+        } else {
+            mainHandler.postDelayed(scheduledRunnable, SCRUB_PREPARE_DELAY_MS)
+        }
+    }
+
     private fun detachRenderTargetLocked() {
-        vulkanPreviewSession?.release()
-        vulkanPreviewSession = null
+        pendingScrubPrepareRunnable?.let(mainHandler::removeCallbacks)
+        pendingScrubPrepareRunnable = null
         scrubSession?.release()
         scrubSession = null
         playbackSession?.release()
@@ -219,5 +261,9 @@ class FusionXEngineController(
         previewCoordinator = null
         scrubModeActive = false
         lastRequestedScrubTimelineTimeUs = null
+    }
+
+    companion object {
+        private const val SCRUB_PREPARE_DELAY_MS = 0L
     }
 }

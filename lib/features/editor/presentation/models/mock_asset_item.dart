@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'editor_media_tab.dart';
 
 class MockAssetItem {
@@ -11,6 +13,7 @@ class MockAssetItem {
     this.durationSeconds,
     this.width,
     this.height,
+    this.posterBytes,
   });
 
   final String id;
@@ -22,6 +25,7 @@ class MockAssetItem {
   final double? durationSeconds;
   final int? width;
   final int? height;
+  final Uint8List? posterBytes;
 
   bool get isVisual =>
       tab == EditorMediaTab.video || tab == EditorMediaTab.image;
@@ -43,6 +47,7 @@ class MockAssetItem {
     double? durationSeconds,
     int? width,
     int? height,
+    Uint8List? posterBytes,
   }) {
     return MockAssetItem(
       id: id ?? this.id,
@@ -54,6 +59,7 @@ class MockAssetItem {
       durationSeconds: durationSeconds ?? this.durationSeconds,
       width: width ?? this.width,
       height: height ?? this.height,
+      posterBytes: posterBytes ?? this.posterBytes,
     );
   }
 }

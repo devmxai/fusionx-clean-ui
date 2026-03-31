@@ -10,6 +10,238 @@
 
 ## Releases
 
+### V40
+
+- APK name:
+  - `Fusion X V40 - Reverse Scrub Recovery Rollback.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `RSR + LFB + ESH + RLS`
+- Meaning:
+  - `RSR` = reverse scrub recovery
+  - `LFB` = live fallback restored
+  - `ESH` = end-scrub handoff
+  - `RLS` = release APK build
+- Notes:
+  - restored live scrub fallback to the playback decoder whenever the proxy
+    scrub lane is not fully ready yet, which recovers the immediate preview
+    path that `V39` removed too early
+  - kept eager proxy preparation and pending-target replay so the proxy lane can
+    still take ownership as soon as it becomes ready
+  - restored a real in-flight scrub dispatch guard for the `endScrub` handoff
+    so the final drag update is not lost before the committed exact seek
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:compileReleaseKotlin` passed
+  - `flutter build apk --release --no-version-check` passed
+
+### V39
+
+- APK name:
+  - `Fusion X V39 - Reverse Scrub Proxy Ownership.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `RSP + PRT + FPD + RLS`
+- Meaning:
+  - `RSP` = reverse scrub path
+  - `PRT` = proxy readiness takeover
+  - `FPD` = frame-paced direct dispatch
+  - `RLS` = release APK build
+- Notes:
+  - live scrub no longer falls back to the source playback decoder while the
+    proxy lane is preparing; scrub now stays on the proxy lane ownership path
+    and replays the latest pending scrub target as soon as the proxy decoder is
+    ready
+  - proxy preparation now starts immediately after clip preparation instead of
+    waiting behind the old delayed handoff window
+  - Flutter scrub dispatch no longer serializes one native `scrubTo` at a time
+    or drops small reverse movements behind frame-snapped delta gates during
+    active drag
+  - active scrub now sends raw timeline microseconds during drag, while exact
+    snap/seek is still reserved for the committed handoff path
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:compileReleaseKotlin` passed
+  - `flutter build apk --release --no-version-check` passed
+
+### V38
+
+- APK name:
+  - `Fusion X V38 - First Frame Recovery and Surface Ownership.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `FFR + SFO + EDR + RLS`
+- Meaning:
+  - `FFR` = first-frame recovery
+  - `SFO` = single surface ownership
+  - `EDR` = error display recovery
+  - `RLS` = release APK build
+- Notes:
+  - removed the runtime Vulkan idle preview session from the live playback
+    surface so `MediaCodec` is again the sole producer for import, first-frame
+    render, playback, and exact seek
+  - hardened `MediaFormat` frame-rate parsing during `loadClip`, which avoids
+    decoder-session startup failures on clips whose frame-rate metadata is
+    stored as an integer instead of a float
+  - the preview texture now mounts as soon as a clip is selected, and the
+    preview overlay shows the real engine error message if first-frame render
+    fails instead of staying on a generic `Loading first frame` message
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:compileReleaseKotlin` passed
+  - `flutter build apk --release --no-version-check` passed
+
+### V37
+
+- APK name:
+  - `Fusion X V37 - Import Recovery and Lazy Proxy Scrub.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `IRY + LPS + TFL + RLS`
+- Meaning:
+  - `IRY` = import recovery
+  - `LPS` = lazy proxy scrub preparation
+  - `TFL` = timeline filmstrip fallback cleanup
+  - `RLS` = release APK build
+- Notes:
+  - proxy scrub no longer starts heavy proxy preparation during import/load; it
+    now waits until the first real scrub request, which is meant to keep
+    `loadClip -> first frame -> play` isolated from proxy failures and startup
+    contention
+  - the preview canvas no longer stretches the low-resolution device poster
+    under the loading text, which removes the blurry poster-with-overlay
+    regression introduced in `V36`
+  - timeline clips no longer seed the video filmstrip from a single imported
+    poster frame, and the artificial delay before filmstrip generation was
+    removed so clips do not first appear as one repeated cover and only later
+    turn into real frames
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `flutter build apk --release --no-version-check` passed
+
+### V36
+
+- APK name:
+  - `Fusion X V36 - Import Preview and Filmstrip Warmup.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `IPW + PSE + FLM + RLS`
+- Meaning:
+  - `IPW` = import preview warmup
+  - `PSE` = poster-seeded editor preview
+  - `FLM` = delayed filmstrip loading with sharper thumbnails
+  - `RLS` = release APK build
+- Notes:
+  - scrub proxy preparation no longer starts at the exact same moment as the
+    first playback load; it is deferred until the initial clip preparation has
+    finished, which is meant to reduce import-time contention and help the
+    first frame appear sooner on canvas
+  - imported Android media thumbnails are now reused as immediate poster seeds
+    for both the canvas and the timeline clip while the native preview and full
+    filmstrip are still warming up
+  - timeline filmstrip loading now waits briefly before generating thumbnails,
+    and generated JPEG thumbnails use higher quality to reduce the blurry cover
+    effect on the clip rectangle
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:compileReleaseKotlin` passed
+  - `flutter build apk --release --no-version-check` passed
+
+### V35
+
+- APK name:
+  - `Fusion X V35 - Frame Snapped Scrub Stability.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `FSS + FDM + LDH + RLS`
+- Meaning:
+  - `FSS` = frame-snapped scrub stability
+  - `FDM` = frame-duration metadata
+  - `LDH` = low-delta hysteresis
+  - `RLS` = release APK build
+- Notes:
+  - source clips now publish `sourceFrameDurationUs` from Android decoder
+    metadata, and the editor screen uses that to snap scrub targets to real
+    frame boundaries instead of sending arbitrary sub-frame timeline times
+  - Flutter scrub dispatch now ignores very small target deltas below roughly
+    half a frame, which is meant to reduce visible oscillation when the finger
+    moves very slowly between two adjacent frames
+  - native transport duration payloads now include frame-rate-derived metadata
+    so future preview/audio phases can stay aligned on real frame cadence
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:assembleRelease` passed
+  - real-device validation is required to confirm whether the remaining slow
+    scrub shimmer is materially reduced without making hand control feel heavy
+
+### V34
+
+- APK name:
+  - `Fusion X V34 - Frame Paced Scrub Handoff.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `FPS + HOF + FGS + RLS`
+- Meaning:
+  - `FPS` = frame-paced scrub scheduling
+  - `HOF` = handoff guard
+  - `FGS` = Flutter gesture stabilization
+  - `RLS` = release APK build
+- Notes:
+  - Flutter scrub dispatch is now frame-paced through `SchedulerBinding`
+    instead of the previous chained loop, so Dart sends at most the latest
+    scrub target per frame while Android remains the final coalescing owner
+  - timeline handoff back from scrub to playback now keeps a dedicated pending
+    state so engine `positionChanged` updates do not pull the playhead during
+    the exact end-of-scrub resolve
+  - horizontal scrub gesture lock now starts sooner for small precise drags
+    and keeps the preview closer to the first meaningful finger movement
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:assembleRelease` passed
+  - real-device validation is required to judge whether the remaining slight
+    delay now feels materially smaller and whether scrub release looks cleaner
+    on both short and long clips
+
+### V33
+
+- APK name:
+  - `Fusion X V33 - Proxy Handoff Stabilization.apk`
+- Milestone label:
+  - `FusionX-Beta2`
+- Shorthand:
+  - `PHS + NFB + ESH + RLS`
+- Meaning:
+  - `PHS` = proxy handoff stabilization
+  - `NFB` = no fallback during proxy build
+  - `ESH` = end-scrub handoff cleanup
+  - `RLS` = release APK build
+- Notes:
+  - `FusionXScrubSession` now keeps the latest scrub target while the proxy is
+    still preparing and dispatches it as soon as the proxy session becomes
+    ready, instead of immediately falling back to exact-source scrub on the
+    playback decoder
+  - proxy decoder sessions now use scrub-specific continuation settings so the
+    proxy lane can re-prepare sooner and render progressively over a wider
+    target window than the source playback decoder
+  - Flutter no longer sends an extra final `scrubTo` before `endScrub`; the
+    final exact target is now committed directly through `endScrub`, which
+    should reduce the extra motion after lifting the finger
+  - the timeline gesture lock threshold was reduced so horizontal scrub starts
+    more readily during precise hand movements
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+  - `./gradlew --no-daemon app:assembleRelease` passed
+  - real-device validation is required to judge whether the remaining slight
+    latency and end-of-scrub drift were reduced materially on short and long
+    clips
+
 ### V32
 
 - APK name:

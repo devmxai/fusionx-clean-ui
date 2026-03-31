@@ -413,7 +413,7 @@ class MainActivity : FlutterActivity() {
         )
 
         return ByteArrayOutputStream().use { outputStream ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 82, outputStream)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
             outputStream.toByteArray()
         }
     }
@@ -484,7 +484,7 @@ class MainActivity : FlutterActivity() {
         } ?: return null
 
         return ByteArrayOutputStream().use { outputStream ->
-            val encoded = bitmap.compress(Bitmap.CompressFormat.JPEG, 72, outputStream)
+            val encoded = bitmap.compress(Bitmap.CompressFormat.JPEG, 84, outputStream)
             bitmap.recycle()
             if (!encoded) {
                 return null

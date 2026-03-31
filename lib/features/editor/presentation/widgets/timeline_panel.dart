@@ -12,6 +12,7 @@ import '../../../../core/theme/app_theme.dart';
 import '../models/timeline_mock_models.dart';
 
 typedef TimelineAssetPathResolver = String? Function(String assetId);
+typedef TimelineAssetThumbnailResolver = Uint8List? Function(String assetId);
 typedef TimelineClipReorderCallback = void Function(
   String clipId,
   int insertionIndex,
@@ -31,6 +32,7 @@ class TimelinePanel extends StatefulWidget {
     this.onClipReorder,
     this.onBackgroundTap,
     this.assetPathResolver,
+    this.assetThumbnailResolver,
     this.onScrubStateChanged,
   });
 
@@ -45,6 +47,7 @@ class TimelinePanel extends StatefulWidget {
   final TimelineClipReorderCallback? onClipReorder;
   final VoidCallback? onBackgroundTap;
   final TimelineAssetPathResolver? assetPathResolver;
+  final TimelineAssetThumbnailResolver? assetThumbnailResolver;
   final ValueChanged<bool>? onScrubStateChanged;
 
   @override
@@ -352,10 +355,10 @@ class _TimelinePanelState extends State<TimelinePanel> {
     _rawScrubDy += event.delta.dy.abs();
 
     if (!_rawScrubLocked) {
-      if (_rawScrubDx < 2.5) {
+      if (_rawScrubDx < 1.25) {
         return;
       }
-      if (_rawScrubDx <= _rawScrubDy + 1) {
+      if (_rawScrubDx <= _rawScrubDy + 0.5) {
         return;
       }
       _rawScrubLocked = true;
@@ -788,6 +791,7 @@ class _TimelinePanelState extends State<TimelinePanel> {
                       isDropSettling:
                           index == activeTrackIndex && _isDropSettling,
                       assetPathResolver: widget.assetPathResolver,
+                      assetThumbnailResolver: widget.assetThumbnailResolver,
                     ),
                     if (index != tracks.length - 1)
                       const SizedBox(height: _rowGap),
@@ -1002,6 +1006,8 @@ class _TimelinePanelState extends State<TimelinePanel> {
                                                           .onBackgroundTap,
                                                       assetPathResolver: widget
                                                           .assetPathResolver,
+                                                      assetThumbnailResolver: widget
+                                                          .assetThumbnailResolver,
                                                     ),
                                                     if (i !=
                                                         widget.tracks.length -
@@ -1081,6 +1087,7 @@ class _TimelineTrackRow extends StatelessWidget {
     required this.onClipLongPressEnd,
     required this.onBackgroundTap,
     required this.assetPathResolver,
+    required this.assetThumbnailResolver,
   });
 
   final double leadingOffset;
@@ -1099,6 +1106,7 @@ class _TimelineTrackRow extends StatelessWidget {
   final ValueChanged<TimelineClipData>? onClipLongPressEnd;
   final VoidCallback? onBackgroundTap;
   final TimelineAssetPathResolver? assetPathResolver;
+  final TimelineAssetThumbnailResolver? assetThumbnailResolver;
 
   IconData get _trackIcon {
     switch (track.kind) {
@@ -1141,6 +1149,9 @@ class _TimelineTrackRow extends StatelessWidget {
       final isSelected = selectedClipId == clip.id;
       final assetPath =
           clip.assetId == null ? null : assetPathResolver?.call(clip.assetId!);
+      final assetThumbnailBytes = clip.assetId == null
+          ? null
+          : assetThumbnailResolver?.call(clip.assetId!);
       final clipWidth = clip.visualWidth(secondsWidth);
 
       clipChildren.add(
@@ -1174,6 +1185,7 @@ class _TimelineTrackRow extends StatelessWidget {
                   trackKind: track.kind,
                   isPlaying: isPlaying,
                   assetPath: assetPath,
+                  initialThumbnailBytes: assetThumbnailBytes,
                   sourceOffsetSeconds: clip.sourceOffsetSeconds ?? 0,
                   durationSeconds: clip.duration,
                   isSelected: isSelected,
@@ -1296,6 +1308,7 @@ class _TimelineReorderTrackRow extends StatelessWidget {
     required this.draggedWidth,
     required this.isDropSettling,
     required this.assetPathResolver,
+    required this.assetThumbnailResolver,
   });
 
   final double leadingOffset;
@@ -1312,6 +1325,7 @@ class _TimelineReorderTrackRow extends StatelessWidget {
   final double? draggedWidth;
   final bool isDropSettling;
   final TimelineAssetPathResolver? assetPathResolver;
+  final TimelineAssetThumbnailResolver? assetThumbnailResolver;
 
   IconData get _trackIcon {
     switch (track.kind) {
@@ -1348,6 +1362,9 @@ class _TimelineReorderTrackRow extends StatelessWidget {
     final isSelected = selectedClipId == clip.id;
     final assetPath =
         clip.assetId == null ? null : assetPathResolver?.call(clip.assetId!);
+    final assetThumbnailBytes = clip.assetId == null
+        ? null
+        : assetThumbnailResolver?.call(clip.assetId!);
 
     if (clip.type == TimelineClipType.placeholder) {
       return _TimelinePlaceholderClip(
@@ -1368,6 +1385,7 @@ class _TimelineReorderTrackRow extends StatelessWidget {
       trackKind: track.kind,
       isPlaying: false,
       assetPath: assetPath,
+      initialThumbnailBytes: assetThumbnailBytes,
       sourceOffsetSeconds: clip.sourceOffsetSeconds ?? 0,
       durationSeconds: clip.duration,
       isSelected: isSelected,
@@ -1487,6 +1505,7 @@ class _TimelineMediaClip extends StatelessWidget {
     required this.trackKind,
     required this.isPlaying,
     required this.assetPath,
+    required this.initialThumbnailBytes,
     required this.sourceOffsetSeconds,
     required this.durationSeconds,
     required this.isSelected,
@@ -1504,6 +1523,7 @@ class _TimelineMediaClip extends StatelessWidget {
   final TimelineTrackKind trackKind;
   final bool isPlaying;
   final String? assetPath;
+  final Uint8List? initialThumbnailBytes;
   final double sourceOffsetSeconds;
   final double durationSeconds;
   final bool isSelected;
@@ -1565,6 +1585,7 @@ class _TimelineMediaClip extends StatelessWidget {
                 _TimelineVideoFilmstrip(
                   path: assetPath!,
                   isPlaying: isPlaying,
+                  seedThumbnailBytes: initialThumbnailBytes,
                   width: width,
                   height: height,
                   sourceOffsetSeconds: sourceOffsetSeconds,
@@ -1634,6 +1655,7 @@ class _TimelineVideoFilmstrip extends StatefulWidget {
   const _TimelineVideoFilmstrip({
     required this.path,
     required this.isPlaying,
+    required this.seedThumbnailBytes,
     required this.width,
     required this.height,
     required this.sourceOffsetSeconds,
@@ -1642,6 +1664,7 @@ class _TimelineVideoFilmstrip extends StatefulWidget {
 
   final String path;
   final bool isPlaying;
+  final Uint8List? seedThumbnailBytes;
   final double width;
   final double height;
   final double sourceOffsetSeconds;
@@ -1678,6 +1701,7 @@ class _TimelineVideoFilmstripState extends State<_TimelineVideoFilmstrip> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.path != widget.path ||
         oldWidget.isPlaying != widget.isPlaying ||
+        oldWidget.seedThumbnailBytes != widget.seedThumbnailBytes ||
         (oldWidget.width - widget.width).abs() > 0.5 ||
         (oldWidget.height - widget.height).abs() > 0.5 ||
         (oldWidget.sourceOffsetSeconds - widget.sourceOffsetSeconds).abs() >
@@ -1772,7 +1796,7 @@ class _TimelineVideoFilmstripState extends State<_TimelineVideoFilmstrip> {
                 child: Image.memory(
                   thumbnails[index % thumbnails.length],
                   fit: BoxFit.cover,
-                  filterQuality: FilterQuality.medium,
+                  filterQuality: FilterQuality.high,
                   gaplessPlayback: true,
                 ),
               ),

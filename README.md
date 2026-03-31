@@ -12,12 +12,13 @@ editor.
 
 Current milestone:
 
-- `Beta 2`
-- this version is considered a good Android-first baseline for continuing the
-  engine build, even though some scrub edge cases and advanced editor features
-  are still open
-- the project is now past pure foundation work and can move into the next,
-  larger engine phase from a usable baseline
+- `Beta 3`
+- this version is considered a stronger Android-first editor baseline, with
+  preview playback, import, trim, and most forward/backward scrubbing working
+  in a usable way on device
+- the main blocker before moving into audio and larger engine phases is now the
+  remaining scrub jitter, especially during slow reverse motion and very fine
+  hand control
 
 Built so far:
 
@@ -25,7 +26,6 @@ Built so far:
 - Flutter is used as the UI layer
 - Android native playback foundation is wired behind the original UI
 - Vulkan Phase 0 bootstrap is now wired into the Android native layer
-- Vulkan Phase 1 preview session now renders directly to the app preview surface
 - a real proxy conformer and dedicated proxy scrub session are now wired into
   the Android engine as the next scrub path
 - real local video import works from device media storage
@@ -57,8 +57,10 @@ Current implementation is in a controlled transition:
 
 - the existing Android decoder preview path remains active for clip playback and
   exact seek
-- a new Vulkan-native preview session now attaches to the real preview surface
-  and renders native frames in idle mode
+- Vulkan runtime capability probing remains wired into the Android native layer,
+  but the actual clip preview surface is currently owned by the decoder path
+  again so `MediaCodec` is the sole runtime producer during import, first-frame
+  render, playback, and exact seek
 - live scrub is now being moved toward a dedicated proxy path:
   - source clip playback remains on the original decoder session
   - scrub can now prepare a separate low-resolution proxy clip in app cache
@@ -101,16 +103,20 @@ Not implemented yet:
 
 The main unresolved issue right now is:
 
-- timeline live scrub preview is still not truly frame-synchronous with finger
-  movement on a real Android device
+- timeline live scrub preview is now usable on device, but it is still not
+  stable enough to feel fully professional under very fine finger motion
 
 Current observed behavior:
 
-- dragging right or left updates timeline position
-- the preview does not consistently reflect the frame at the exact same moment
-  as the finger movement
-- on device, preview behavior can still appear delayed or update only after the
-  finger is released
+- dragging right or left now updates timeline position and preview in a mostly
+  usable way across real clips
+- forward scrub is materially better than before, and reverse scrub is no
+  longer in the fully broken state seen in earlier regressions
+- the main remaining artifact is visible jitter or shake during slow or very
+  precise scrub movement, especially when changing direction or moving back
+  frame by frame
+- this jitter appears to be the last major quality blocker before closing the
+  current preview/scrub phase
 
 This issue is currently being investigated across:
 
@@ -122,15 +128,12 @@ This issue is currently being investigated across:
 
 Latest attempt in progress:
 
-- stopped treating the current scrub/backend path as the long-term renderer
-- added a native Vulkan bootstrap library under `android/app/src/main/cpp/`
-- the Android engine now creates a real Vulkan preview session and attaches it
-  to the playback surface before clip load
-- the Android engine plugin still reports Vulkan runtime capabilities from
-  native code on startup
-- the decoder-based clip playback path remains the legacy runtime for loaded
-  media, but idle preview ownership is now Vulkan-backed instead of
-  diagnostics-only
+- removed the idle Vulkan preview session from the live playback surface because
+  it was still competing with `MediaCodec` ownership on the same runtime target
+- hardened clip metadata parsing so `loadClip` no longer depends on
+  `KEY_FRAME_RATE` always being exposed as a `Float`
+- the preview UI now mounts the native texture as soon as a clip is selected
+  and shows the real engine error message if first-frame rendering fails
 - the timeline UI now follows the same live timeline-time notifier used by the
   preview metadata instead of waiting for full-screen rebuilds
 - scrub release now stays in a guarded settle window until the handoff back to
@@ -188,24 +191,47 @@ Latest attempt in progress:
 - proxy decoder sessions no longer downsize the shared preview surface to the
   proxy's resolution, which should reduce unnecessary blur during scrub while
   keeping the same single-surface runtime model
+- while the proxy is still preparing, the scrub session now retains the latest
+  requested scrub target and replays it as soon as the proxy session is ready
+  instead of immediately falling back to the heavier source scrub path
+- the end-of-scrub handoff no longer sends an extra final `scrubTo` before the
+  exact resolve, which should reduce the extra movement seen right after
+  lifting the finger
+- the active proxy scrub lane now uses scrub-specific continuation settings so
+  it can re-prepare sooner and chase the finger over a wider progressive
+  target window than the source playback decoder
+- Flutter now frame-paces scrub command dispatch so Dart sends at most the
+  latest scrub target per visual frame instead of chaining a tighter dispatch
+  loop on its own
+- the editor screen now keeps a dedicated scrub-handoff guard so late engine
+  position updates are less likely to pull the playhead backward while the
+  final exact resolve is still in flight
+- the Android decoder path now reports frame-duration metadata back to Flutter,
+  and the editor screen uses that to snap scrub targets to real frame
+  boundaries with a very small low-delta hysteresis, which is intended to
+  reduce the visible shimmer that can happen during extremely slow drags
 
 This is the current top blocking issue before moving forward to more advanced
 editor behaviors.
 
-## Beta 2 Notes
+## Beta 3 Notes
 
-What `Beta 2` means right now:
+What `Beta 3` means right now:
 
 - the original product UI is no longer a mock-only shell
 - native playback and trim are working in the real editor surface
 - real media browsing and insertion are working on device
 - proxy-based scrub groundwork is now in place
-- overall behavior is now good enough to preserve as the first beta baseline
-  before moving to larger engine development phases
+- forward and backward scrub now work in a generally usable way on device,
+  although they still need final smoothing
+- overall behavior is now good enough to preserve as the next beta baseline
+  before moving to audio and larger engine development phases
 
-What `Beta 2` does not mean:
+What `Beta 3` does not mean:
 
 - scrub is not yet at final professional quality on every clip
+- slow and micro-precision scrub still show jitter that must be solved before
+  the preview phase is considered closed
 - the engine is not feature-complete
 - export, audio, multi-track, transitions, and effects are still future phases
 

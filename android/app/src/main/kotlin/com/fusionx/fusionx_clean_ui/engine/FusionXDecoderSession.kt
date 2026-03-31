@@ -23,6 +23,8 @@ class FusionXDecoderSession(
     private val onClipPrepared: (() -> Unit)? = null,
     private val renderInitialFrameOnLoad: Boolean = true,
     private val resizeRenderTargetOnLoad: Boolean = true,
+    private val scrubForwardContinuationWindowUs: Long = SCRUB_FORWARD_CONTINUATION_WINDOW_US,
+    private val scrubProgressiveTargetWindowUs: Long = SCRUB_PROGRESSIVE_TARGET_WINDOW_US,
 ) {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val resourceLock = Any()
@@ -293,7 +295,7 @@ class FusionXDecoderSession(
                     val progressiveLagUs = (targetSourceTimeUs - frameSourceTimeUs).coerceAtLeast(0L)
                     val shouldRenderProgressive =
                         !reachedTarget &&
-                            progressiveLagUs <= SCRUB_PROGRESSIVE_TARGET_WINDOW_US &&
+                            progressiveLagUs <= scrubProgressiveTargetWindowUs &&
                             frameSourceTimeUs > lastProgressiveRenderedSourceTimeUs &&
                             (frameSourceTimeUs - lastProgressiveRenderedSourceTimeUs) >=
                                 SCRUB_PROGRESSIVE_RENDER_STEP_US
@@ -388,6 +390,7 @@ class FusionXDecoderSession(
 
         val width = format.getIntegerSafely(MediaFormat.KEY_WIDTH, 720)
         val height = format.getIntegerSafely(MediaFormat.KEY_HEIGHT, 1280)
+        val frameRate = format.getFloatSafely(MediaFormat.KEY_FRAME_RATE, 0f)
         if (resizeRenderTargetOnLoad) {
             renderTarget.resize(width, height)
         }
@@ -412,6 +415,7 @@ class FusionXDecoderSession(
                 sourceDurationUs = durationUs,
                 sourceWidth = width,
                 sourceHeight = height,
+                sourceFrameRate = frameRate,
             )
         }
         if (renderInitialFrameOnLoad) {
@@ -694,7 +698,7 @@ class FusionXDecoderSession(
             return true
         }
         return (safeTargetSourceTimeUs - currentDecodedSourceTimeUs) >
-            SCRUB_FORWARD_CONTINUATION_WINDOW_US
+            scrubForwardContinuationWindowUs
     }
 
     private fun canContinueDecoderFrom(sourceTimeUs: Long): Boolean {
@@ -764,6 +768,29 @@ class FusionXDecoderSession(
 
     private fun MediaFormat.getLongSafely(key: String, defaultValue: Long): Long {
         return if (containsKey(key)) getLong(key) else defaultValue
+    }
+
+    private fun MediaFormat.getFloatSafely(key: String, defaultValue: Float): Float {
+        if (!containsKey(key)) {
+            return defaultValue
+        }
+        return try {
+            getFloat(key)
+        } catch (_: Throwable) {
+            try {
+                getInteger(key).toFloat()
+            } catch (_: Throwable) {
+                try {
+                    getLong(key).toFloat()
+                } catch (_: Throwable) {
+                    try {
+                        getString(key)?.toFloatOrNull() ?: defaultValue
+                    } catch (_: Throwable) {
+                        defaultValue
+                    }
+                }
+            }
+        }
     }
 
     companion object {

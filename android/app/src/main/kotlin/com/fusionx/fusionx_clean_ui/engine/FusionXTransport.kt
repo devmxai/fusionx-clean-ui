@@ -9,6 +9,7 @@ class FusionXTransport(
     private var sourceDurationUs = 0L
     private var sourceWidth = 0
     private var sourceHeight = 0
+    private var sourceFrameRate = 0f
     private var trimStartUs = 0L
     private var trimEndUs = 0L
     private var currentSourceTimeUs = 0L
@@ -21,12 +22,14 @@ class FusionXTransport(
         sourceDurationUs: Long,
         sourceWidth: Int,
         sourceHeight: Int,
+        sourceFrameRate: Float,
     ) {
         val durationPayload: Map<String, Any?>
         synchronized(lock) {
             this.sourceDurationUs = sourceDurationUs.coerceAtLeast(0L)
             this.sourceWidth = sourceWidth.coerceAtLeast(0)
             this.sourceHeight = sourceHeight.coerceAtLeast(0)
+            this.sourceFrameRate = sourceFrameRate.coerceAtLeast(0f)
             trimStartUs = 0L
             trimEndUs = this.sourceDurationUs
             currentSourceTimeUs = trimStartUs
@@ -138,6 +141,8 @@ class FusionXTransport(
             "sourceDurationUs" to sourceDurationUs,
             "sourceWidth" to sourceWidth,
             "sourceHeight" to sourceHeight,
+            "sourceFrameRate" to sourceFrameRate,
+            "sourceFrameDurationUs" to resolveFrameDurationUsLocked(),
             "trimStartUs" to trimStartUs,
             "trimEndUs" to trimEndUs,
             "clipDurationUs" to (trimEndUs - trimStartUs).coerceAtLeast(0L),
@@ -164,6 +169,13 @@ class FusionXTransport(
 
     private fun sourceToTimelineTimeUsLocked(sourceTimeUs: Long): Long {
         return (sourceTimeUs - trimStartUs).coerceAtLeast(0L)
+    }
+
+    private fun resolveFrameDurationUsLocked(): Long {
+        if (sourceFrameRate <= 0f) {
+            return 0L
+        }
+        return (1_000_000f / sourceFrameRate).toLong().coerceAtLeast(1L)
     }
 
     private fun clampSourceTimeUsLocked(sourceTimeUs: Long): Long {
