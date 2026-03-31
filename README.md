@@ -1,27 +1,27 @@
 # FusionX Clean UI
 
-FusionX Clean UI is the active Android-first editor shell and native engine
-foundation for rebuilding FusionX in controlled production phases.
+FusionX Clean UI is the active Android-first editor shell and engine foundation
+for rebuilding FusionX in controlled production phases.
 
 This repository is no longer a mock UI experiment. The original Flutter editor
-surface is wired to a real Android playback/scrub pipeline, and the current
-goal is to turn that foundation into a professional mobile editor step by step.
+surface is wired to a real Android playback and scrub pipeline, and the current
+goal is to grow that base into a professional mobile editor step by step.
 
 ## Current Status
 
 Current milestone:
 
-- `Beta 5`
-- this beta is considered the first practical handoff point after the long
+- `Beta 6`
+- this beta is the first timeline-editing handoff after the long
   preview/scrub stabilization cycle
-- import, first-frame rendering, playback, seek, trim, and bidirectional scrub
-  are now working inside the original product UI at a level good enough to move
-  forward into the next engine phases
-- reverse scrub has been significantly improved and the original “fully broken”
-  state is no longer the baseline
-- fine-grain polish can still continue later, but the current preview/scrub
-  problem is considered closed for this beta milestone so the roadmap can move
-  on
+- import, first-frame rendering, playback, seek, trim, bidirectional scrub,
+  inertial timeline release, pinch zoom, cut, selection, and basic split-delete
+  flow are now working inside the original product UI
+- split timelines now keep their filmstrip populated more naturally by reusing
+  the original strip as a shared reference instead of rebuilding both halves as
+  brand-new strips after every cut
+- the editor is now beyond “single clip playback demo” and has entered a
+  practical editing-foundation stage
 
 Built so far:
 
@@ -34,12 +34,17 @@ Built so far:
 - real local video import works from device media storage
 - the native preview surface is attached inside the original canvas
 - real `play`, `pause`, `seek`, and `trim` work on device
-- forward and reverse scrub now both work in a usable way on real clips
-- the media bottom sheet is connected to Android media browsing for:
-  - `Video`
-  - `Image` browsing
+- forward and reverse scrub work inside the real timeline
+- inertial release after swipe is supported for timeline motion
+- timeline pinch zoom is supported for coarse and fine navigation
+- timeline split/cut is supported with seam marker and transition bridge mock
+- selected split segments can be visually targeted and deleted in the basic
+  two-half split flow
+- filmstrip seeding and reuse now reduce black refresh and unnecessary rebuilds
+  on import and after cut
 - versioned APK workflow is in place
-- build history is tracked in [docs/build-history.md](docs/build-history.md)
+- build history is tracked in
+  [docs/build-history.md](/Users/mx/Documents/New%20project/fusionx-clean-ui/docs/build-history.md)
 
 ## Architecture Direction
 
@@ -67,14 +72,19 @@ Current implementation:
   - source clip playback remains on the main decoder session
   - scrub can prepare a separate low-resolution proxy clip in app cache
   - scrub can use a dedicated native scrub session when the proxy is ready
-- the latest scrub improvements include:
+- the current scrub stack includes:
   - all-intra-oriented proxy generation
   - indexed proxy/source time mapping
   - direction-flip handling improvements in Flutter
   - reverse-start dead-zone reduction
-- the next large decision is no longer “can scrub work at all”, but rather how
-  to grow from this baseline into audio, project complexity, and deeper engine
-  architecture
+  - end-of-scrub and playback handoff hardening
+- the current timeline stack includes:
+  - inertial release motion
+  - pinch zoom
+  - cut/split
+  - split seam rendering
+  - split selection highlighting
+  - split filmstrip reuse from a shared reference strip
 
 ## What Works Right Now
 
@@ -92,6 +102,12 @@ Inside the original editor UI:
 - scrub forward through the clip
 - scrub backward through the clip
 - change scrub direction without falling back to the earlier broken behavior
+- release timeline drag with inertial glide
+- zoom the timeline in and out with pinch
+- cut the active video clip into two adjacent timeline segments
+- render a seam marker and transition bridge mock at the cut point
+- select the left or right split segment
+- delete the selected segment in the current basic split workflow
 
 ## What Is Not Built Yet
 
@@ -99,65 +115,65 @@ Not implemented yet:
 
 - audio engine
 - export pipeline
+- real transitions
 - effects
-- transitions
 - multi-track engine
 - text engine
 - lip sync engine
 - iOS engine
 - final shared native core
 - image import into the playback engine
+- generalized delete/edit operations for arbitrary multi-segment timelines
 
-## Phase Closure
+## Beta 6 Notes
 
-The long preview/scrub stabilization phase is now considered complete for the
-beta roadmap.
+What `Beta 6` means:
 
-What that means in practice:
-
-- this repository now has a device-proven editor baseline that can import,
-  preview, play, trim, and scrub inside the real product UI
-- the earlier “scrub is fundamentally broken” blocker is no longer the
-  dominating problem
-- the engine is now good enough to move on to broader phases such as audio,
-  richer timeline behavior, and larger project complexity
-
-What this does **not** mean:
-
-- the editor is not yet feature-complete
-- polish opportunities still exist, especially for very fine micro-scrub feel
-- the current beta is a practical shipping milestone for the foundation, not
-  the end of engine work
-
-## Beta 5 Notes
-
-What `Beta 5` means:
-
-- the original product UI is preserved as the only editor surface
-- Android preview/playback/trim/import are established as a real working base
-- proxy-based scrub is no longer experimental only; it is now part of the real
-  engine path
-- reverse scrub has been improved enough to stop blocking the roadmap
-- this beta is the handoff point from “stabilize preview/scrub” to “expand the
-  engine”
+- the original product UI is still preserved as the only editor surface
+- Android preview/playback/trim/import remain stable enough to keep building on
+- the timeline is no longer limited to scrub only; it now has the first real
+  editing tools and interactions
+- split/cut behavior has become fast enough to use as a real editing action,
+  not just a visual mock
+- the repository now has a practical editing foundation for moving into the
+  next product layers
 
 Main technical highlights of this beta cycle:
 
-- first-frame and surface ownership regressions were recovered
-- proxy scrub was moved to an all-intra-oriented path
-- proxy/source time mapping was upgraded from simple duration ratio toward
-  indexed frame mapping
-- reverse-start direction flip handling was tightened in both timeline and
-  screen stabilization code
-- end-of-scrub and playback handoff behavior was hardened
-- the engine is now substantially more predictable on real Android devices than
-  the earlier beta baselines
+- timeline inertial release was added and tuned to feel closer to mobile editor
+  behavior
+- timeline pinch zoom was added so the user can navigate by coarse seconds or
+  finer frame-level precision
+- split/cut was wired to the actual timeline model
+- split seams and transition bridge placeholders were added
+- selection highlighting and basic delete behavior were added for split
+  segments
+- import poster seeding reduced black placeholders on the timeline
+- split filmstrip reuse now keeps the left and right halves visually populated
+  by cropping a shared reference strip instead of regenerating both halves from
+  scratch after every cut
 
-Next major phase after `Beta 5`:
+## Known Limitations
+
+Known issues in the current `Beta 6` baseline:
+
+- the preview metadata column still overflows at the default narrow widget-test
+  viewport; this is the current open review finding in
+  [fusionx_clean_ui_screen.dart](/Users/mx/Documents/New%20project/fusionx-clean-ui/lib/features/editor/presentation/screens/fusionx_clean_ui_screen.dart)
+- multi-segment delete is not generalized yet; the current delete flow is meant
+  for the basic split workflow rather than a full nonlinear project model
+- timeline polish can still improve for very fine micro-scrub feel and for
+  larger future project complexity
+
+## Next Phase
+
+The next major phase after `Beta 6` should focus on broader editor depth rather
+than re-solving the already-stabilized preview foundation:
 
 - audio phase 0
-- richer project/timeline structure
-- continued renderer/compositor evolution
+- richer project and timeline structure
+- generalized clip edit operations beyond a single split pair
+- continued renderer and compositor evolution
 - export and later advanced editor behaviors
 
 ## Repository Notes
@@ -165,7 +181,7 @@ Next major phase after `Beta 5`:
 - release APK files are generated locally and versioned in the local workflow
   but are not part of the repository source history
 - progress is documented incrementally under `docs/`
-- the current development approach is phase-based and device-verified
+- the development approach is phase-based and device-verified
 
 ## Run
 

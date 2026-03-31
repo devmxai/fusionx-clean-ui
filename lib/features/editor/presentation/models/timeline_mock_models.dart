@@ -25,6 +25,8 @@ class TimelineClipData {
     required this.tone,
     this.assetId,
     this.sourceOffsetSeconds,
+    this.filmstripReferenceOffsetSeconds,
+    this.filmstripReferenceDurationSeconds,
     this.label,
     this.splitGroupId,
   });
@@ -35,6 +37,8 @@ class TimelineClipData {
   final TimelineClipTone tone;
   final String? assetId;
   final double? sourceOffsetSeconds;
+  final double? filmstripReferenceOffsetSeconds;
+  final double? filmstripReferenceDurationSeconds;
   final String? label;
   final String? splitGroupId;
 
@@ -45,6 +49,8 @@ class TimelineClipData {
     TimelineClipTone? tone,
     String? assetId,
     double? sourceOffsetSeconds,
+    double? filmstripReferenceOffsetSeconds,
+    double? filmstripReferenceDurationSeconds,
     String? label,
     String? splitGroupId,
   }) {
@@ -55,6 +61,10 @@ class TimelineClipData {
       tone: tone ?? this.tone,
       assetId: assetId ?? this.assetId,
       sourceOffsetSeconds: sourceOffsetSeconds ?? this.sourceOffsetSeconds,
+      filmstripReferenceOffsetSeconds:
+          filmstripReferenceOffsetSeconds ?? this.filmstripReferenceOffsetSeconds,
+      filmstripReferenceDurationSeconds: filmstripReferenceDurationSeconds ??
+          this.filmstripReferenceDurationSeconds,
       label: label ?? this.label,
       splitGroupId: splitGroupId ?? this.splitGroupId,
     );
@@ -62,8 +72,17 @@ class TimelineClipData {
 
   double visualWidth(double secondsWidth) {
     final baseWidth = duration * secondsWidth;
-    final minWidth = type == TimelineClipType.media ? 84.0 : 118.0;
+    final minWidth = type == TimelineClipType.media
+        ? (splitGroupId == null ? 84.0 : 2.0)
+        : 118.0;
     return baseWidth < minWidth ? minWidth : baseWidth;
+  }
+
+  double timelineWidth(double secondsWidth) {
+    if (type != TimelineClipType.media) {
+      return visualWidth(secondsWidth);
+    }
+    return duration * secondsWidth;
   }
 }
 

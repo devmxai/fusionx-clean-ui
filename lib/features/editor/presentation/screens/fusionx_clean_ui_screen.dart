@@ -38,6 +38,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   static const int _scrubSettleToleranceUs = 40000;
   static const int _defaultFrameDurationUs = 33333;
   static const String _primaryClipId = 'clip-primary';
+  static const String _primarySplitGroupId = 'split-primary';
   static const List<EditorMediaTab> _mediaSheetTabs = <EditorMediaTab>[
     EditorMediaTab.video,
     EditorMediaTab.image,
@@ -101,6 +102,8 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   bool _nativeScrubReady = false;
   bool _scrubDispatchScheduled = false;
   bool _isTimelineScrubHandoffPending = false;
+  int _splitClipSequence = 1;
+  List<TimelineClipData> _videoTimelineClips = const <TimelineClipData>[];
 
   bool get _isAndroidFoundationSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -116,9 +119,20 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     return _projectWidth / _projectHeight;
   }
 
-  double get _timelineDuration => _hasClip
-      ? math.max(0.25, (_trimEndUs - _trimStartUs) / 1000000).toDouble()
-      : 12;
+  double get _timelineDuration {
+    if (_videoTimelineClips.isNotEmpty) {
+      final total = _videoTimelineClips.fold<double>(
+        0,
+        (sum, clip) => sum + clip.duration,
+      );
+      if (total > 0) {
+        return total;
+      }
+    }
+    return _hasClip
+        ? math.max(0.25, (_trimEndUs - _trimStartUs) / 1000000).toDouble()
+        : 12;
+  }
 
   MockAssetItem? get _selectedAsset {
     final selectedAssetId = _selectedAssetId;
@@ -137,6 +151,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   void initState() {
     super.initState();
     _assetLibrary = ValueNotifier<List<MockAssetItem>>(const <MockAssetItem>[]);
+    _videoTimelineClips = _buildInitialTimelineClips();
     _tracks = _buildPhaseOneTracks();
     _eventsSubscription = _engineBridge.events.listen(_handleEngineEvent);
     unawaited(_initializeFoundation());
@@ -262,8 +277,10 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
           _lastQueuedScrubTimelineTimeUs = null;
           _lastRawScrubTimelineTimeUs = null;
           _lastScrubDirection = 0;
+          _videoTimelineClips = _buildInitialTimelineClips();
           _tracks = _buildPhaseOneTracks();
-          _selectedClipId = _hasClip ? _primaryClipId : null;
+          _selectedClipId =
+              _videoTimelineClips.isNotEmpty ? _videoTimelineClips.first.id : null;
         });
         _previewTimelineTimeUs.value = 0;
       case FusionXEngineEventType.positionChanged:
@@ -317,8 +334,10 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
           _lastQueuedScrubTimelineTimeUs = null;
           _lastRawScrubTimelineTimeUs = null;
           _lastScrubDirection = 0;
+          _videoTimelineClips = _buildInitialTimelineClips();
           _tracks = _buildPhaseOneTracks();
-          _selectedClipId = _hasClip ? _primaryClipId : null;
+          _selectedClipId =
+              _videoTimelineClips.isNotEmpty ? _videoTimelineClips.first.id : null;
         });
         _previewTimelineTimeUs.value = 0;
       case FusionXEngineEventType.error:
@@ -347,32 +366,34 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     );
   }
 
-  List<TimelineTrackData> _buildPhaseOneTracks() {
+  List<TimelineClipData> _buildInitialTimelineClips() {
     final selectedAsset = _selectedAsset;
     final clipDurationSeconds = (_trimEndUs - _trimStartUs) / 1000000;
     if (selectedAsset == null || clipDurationSeconds <= 0) {
-      return const <TimelineTrackData>[
-        TimelineTrackData(
-          kind: TimelineTrackKind.video,
-          clips: <TimelineClipData>[],
-        ),
-      ];
+      return const <TimelineClipData>[];
     }
 
+    return <TimelineClipData>[
+      TimelineClipData(
+        id: _primaryClipId,
+        duration: math.max(0.25, clipDurationSeconds).toDouble(),
+        type: TimelineClipType.media,
+        tone: TimelineClipTone.hero,
+        assetId: selectedAsset.id,
+        label: selectedAsset.label,
+        sourceOffsetSeconds: _trimStartUs / 1000000,
+        filmstripReferenceOffsetSeconds: _trimStartUs / 1000000,
+        filmstripReferenceDurationSeconds:
+            math.max(0.25, clipDurationSeconds).toDouble(),
+      ),
+    ];
+  }
+
+  List<TimelineTrackData> _buildPhaseOneTracks() {
     return <TimelineTrackData>[
       TimelineTrackData(
         kind: TimelineTrackKind.video,
-        clips: <TimelineClipData>[
-          TimelineClipData(
-            id: _primaryClipId,
-            duration: math.max(0.25, clipDurationSeconds).toDouble(),
-            type: TimelineClipType.media,
-            tone: TimelineClipTone.hero,
-            assetId: selectedAsset.id,
-            label: selectedAsset.label,
-            sourceOffsetSeconds: _trimStartUs / 1000000,
-          ),
-        ],
+        clips: List<TimelineClipData>.unmodifiable(_videoTimelineClips),
       ),
     ];
   }
@@ -608,7 +629,16 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
       return;
     }
     final existingAsset = _findAssetByPath(item.uri);
-    final asset = existingAsset ?? _buildImportedVideoAsset(item);
+    final posterBytes = await _loadDeviceMediaThumbnail(item);
+    final baseAsset = existingAsset ?? _buildImportedVideoAsset(item);
+    final asset = baseAsset.copyWith(
+      posterBytes: posterBytes,
+      width: item.width ?? baseAsset.width,
+      height: item.height ?? baseAsset.height,
+      durationSeconds: item.durationUs == null
+          ? baseAsset.durationSeconds
+          : item.durationUs! / 1000000,
+    );
     _upsertAsset(asset);
     await _loadAsset(asset);
   }
@@ -663,6 +693,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
         _projectWidth = _defaultProjectWidth;
         _projectHeight = _defaultProjectHeight;
       }
+      _videoTimelineClips = _buildInitialTimelineClips();
       _tracks = _buildPhaseOneTracks();
     });
     _previewTimelineTimeUs.value = 0;
@@ -1091,7 +1122,8 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   }
 
   void _selectClip(String clipId) {
-    if (clipId != _primaryClipId) {
+    final exists = _videoTimelineClips.any((clip) => clip.id == clipId);
+    if (!exists) {
       return;
     }
     setState(() {
@@ -1116,6 +1148,7 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
   Future<void> _trimSelectedClip({required bool fromStart}) async {
     if (!_hasClip ||
         !_canUseNativePlayback ||
+        _videoTimelineClips.length != 1 ||
         _selectedClipId != _primaryClipId) {
       return;
     }
@@ -1203,6 +1236,231 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
     return null;
   }
 
+  bool get _canSplitAtCurrentTime => _resolveSplitCandidate() != null;
+
+  _TimelineClipLocation? _resolveSplitCandidate() {
+    if (_videoTimelineClips.isEmpty) {
+      return null;
+    }
+    final minimumSegmentUs = math.max(1, _sourceFrameDurationUs);
+    var timelineCursorUs = 0;
+    _TimelineClipLocation? fallback;
+    final preferredClipId = _selectedClipId;
+    for (var index = 0; index < _videoTimelineClips.length; index++) {
+      final clip = _videoTimelineClips[index];
+      final clipDurationUs = (clip.duration * 1000000).round();
+      final clipStartUs = timelineCursorUs;
+      final clipEndUs = clipStartUs + clipDurationUs;
+      final isInsideClip = _timelineTimeUs > clipStartUs && _timelineTimeUs < clipEndUs;
+      if (!isInsideClip) {
+        timelineCursorUs = clipEndUs;
+        continue;
+      }
+      final relativeCutUs = _timelineTimeUs - clipStartUs;
+      final isValidSplit = relativeCutUs >= minimumSegmentUs &&
+          (clipDurationUs - relativeCutUs) >= minimumSegmentUs;
+      if (!isValidSplit) {
+        timelineCursorUs = clipEndUs;
+        continue;
+      }
+      final location = _TimelineClipLocation(
+        clip: clip,
+        index: index,
+        timelineStartUs: clipStartUs,
+        durationUs: clipDurationUs,
+        relativeCutUs: relativeCutUs,
+      );
+      if (preferredClipId != null && clip.id == preferredClipId) {
+        return location;
+      }
+      fallback ??= location;
+      timelineCursorUs = clipEndUs;
+    }
+    return fallback;
+  }
+
+  String _nextSplitClipId() => 'clip-split-${_splitClipSequence++}';
+
+  Future<void> _splitSelectedClip() async {
+    if (!_canSplitAtCurrentTime) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Move the playhead inside a clip before using Cut.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_isTimelineScrubSettling) {
+      await _completeTimelineScrub();
+    }
+    final location = _resolveSplitCandidate();
+    if (location == null) {
+      return;
+    }
+
+    final clip = location.clip;
+    final leftDurationUs = location.relativeCutUs;
+    final rightDurationUs = location.durationUs - location.relativeCutUs;
+    final splitGroupId = clip.splitGroupId ?? _primarySplitGroupId;
+    final referenceOffsetSeconds =
+        clip.filmstripReferenceOffsetSeconds ?? (clip.sourceOffsetSeconds ?? 0);
+    final referenceDurationSeconds =
+        clip.filmstripReferenceDurationSeconds ?? clip.duration;
+    final leftClip = clip.copyWith(
+      id: clip.id,
+      duration: leftDurationUs / 1000000,
+      splitGroupId: splitGroupId,
+      filmstripReferenceOffsetSeconds: referenceOffsetSeconds,
+      filmstripReferenceDurationSeconds: referenceDurationSeconds,
+    );
+    final rightClip = clip.copyWith(
+      id: _nextSplitClipId(),
+      duration: rightDurationUs / 1000000,
+      sourceOffsetSeconds:
+          (clip.sourceOffsetSeconds ?? 0) + (leftDurationUs / 1000000),
+      splitGroupId: splitGroupId,
+      filmstripReferenceOffsetSeconds: referenceOffsetSeconds,
+      filmstripReferenceDurationSeconds: referenceDurationSeconds,
+    );
+
+    final nextClips = List<TimelineClipData>.from(_videoTimelineClips)
+      ..removeAt(location.index)
+      ..insertAll(location.index, <TimelineClipData>[leftClip, rightClip]);
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _videoTimelineClips = List<TimelineClipData>.unmodifiable(nextClips);
+      _tracks = _buildPhaseOneTracks();
+      _selectedClipId = rightClip.id;
+    });
+  }
+
+  bool get _canDeleteSelectedClip =>
+      _selectedClipId != null && _resolveSelectedClipIndex() != null;
+
+  int? _resolveSelectedClipIndex() {
+    final selectedClipId = _selectedClipId;
+    if (selectedClipId == null) {
+      return null;
+    }
+    final index =
+        _videoTimelineClips.indexWhere((clip) => clip.id == selectedClipId);
+    return index >= 0 ? index : null;
+  }
+
+  Future<void> _deleteSelectedClip() async {
+    final selectedIndex = _resolveSelectedClipIndex();
+    if (selectedIndex == null || _videoTimelineClips.isEmpty) {
+      return;
+    }
+    if (_videoTimelineClips.length == 1) {
+      if (_isPlaying && _canUseNativePlayback) {
+        await _engineBridge.dispatch(
+          const FusionXEngineCommand(
+            type: FusionXEngineCommandType.pause,
+          ),
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedAssetId = null;
+        _selectedClipId = null;
+        _playbackStatus = FusionXTransportState.ready.name;
+        _lastError = null;
+        _firstFrameRendered = false;
+        _sourceDurationUs = 0;
+        _trimStartUs = 0;
+        _trimEndUs = 0;
+        _sourceTimeUs = 0;
+        _timelineTimeUs = 0;
+        _nativeScrubReady = false;
+        _activeScrubTimelineTimeUs = null;
+        _stableScrubTimelineTimeUs = null;
+        _pendingScrubTimelineTimeUs = null;
+        _videoTimelineClips = const <TimelineClipData>[];
+        _tracks = _buildPhaseOneTracks();
+      });
+      _previewTimelineTimeUs.value = 0;
+      return;
+    }
+    if (_videoTimelineClips.length != 2) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Delete is currently wired for the two split halves of one clip.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_isTimelineScrubSettling) {
+      await _completeTimelineScrub();
+    }
+    final remainingIndex = selectedIndex == 0 ? 1 : 0;
+    final remainingClip = _videoTimelineClips[remainingIndex];
+    final nextTrimStartUs =
+        ((remainingClip.sourceOffsetSeconds ?? 0) * 1000000).round();
+    final nextTrimEndUs =
+        (((remainingClip.sourceOffsetSeconds ?? 0) + remainingClip.duration) *
+                1000000)
+            .round();
+    final nextDurationUs = nextTrimEndUs - nextTrimStartUs;
+    final nextTimelineTimeUs = selectedIndex == 0
+        ? (_timelineTimeUs - (_videoTimelineClips.first.duration * 1000000).round())
+            .clamp(0, nextDurationUs)
+        : _timelineTimeUs.clamp(0, nextDurationUs);
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _trimStartUs = nextTrimStartUs;
+      _trimEndUs = nextTrimEndUs;
+      _timelineTimeUs = nextTimelineTimeUs;
+      _sourceTimeUs = nextTrimStartUs + nextTimelineTimeUs;
+      _videoTimelineClips = <TimelineClipData>[
+        TimelineClipData(
+          id: _primaryClipId,
+          duration: nextDurationUs / 1000000,
+          type: TimelineClipType.media,
+          tone: TimelineClipTone.hero,
+          assetId: remainingClip.assetId,
+          label: remainingClip.label,
+          sourceOffsetSeconds: nextTrimStartUs / 1000000,
+          filmstripReferenceOffsetSeconds: nextTrimStartUs / 1000000,
+          filmstripReferenceDurationSeconds: nextDurationUs / 1000000,
+        ),
+      ];
+      _tracks = _buildPhaseOneTracks();
+      _selectedClipId = _primaryClipId;
+    });
+    _previewTimelineTimeUs.value = nextTimelineTimeUs;
+
+    if (_canUseNativePlayback) {
+      await _engineBridge.dispatch(
+        FusionXEngineCommand(
+          type: FusionXEngineCommandType.setTrim,
+          payload: SetTrimPayload(
+            trimStartUs: nextTrimStartUs,
+            trimEndUs: nextTrimEndUs,
+          ).toMap(),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedAsset = _selectedAsset;
@@ -1257,15 +1515,27 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
                         child: EditorToolsBar(
                           embedded: true,
                           isPlaying: _isPlaying,
-                          onSplit: null,
-                          onTrimRight: _selectedClipId == _primaryClipId
+                          onSplit: _hasClip && _canSplitAtCurrentTime
+                              ? () {
+                                  unawaited(_splitSelectedClip());
+                                }
+                              : null,
+                          onTrimRight:
+                              _videoTimelineClips.length == 1 &&
+                                      _selectedClipId == _primaryClipId
                               ? _trimSelectedClipRight
                               : null,
-                          onTrimLeft: _selectedClipId == _primaryClipId
+                          onTrimLeft:
+                              _videoTimelineClips.length == 1 &&
+                                      _selectedClipId == _primaryClipId
                               ? _trimSelectedClipLeft
                               : null,
                           onDuplicate: null,
-                          onDelete: null,
+                          onDelete: _canDeleteSelectedClip
+                              ? () {
+                                  unawaited(_deleteSelectedClip());
+                                }
+                              : null,
                           onPlayToggle: _hasClip
                               ? () {
                                   unawaited(_togglePlayback());
@@ -1325,6 +1595,22 @@ class _FusionXCleanUiScreenState extends State<FusionXCleanUiScreen> {
       ),
     );
   }
+}
+
+class _TimelineClipLocation {
+  const _TimelineClipLocation({
+    required this.clip,
+    required this.index,
+    required this.timelineStartUs,
+    required this.durationUs,
+    required this.relativeCutUs,
+  });
+
+  final TimelineClipData clip;
+  final int index;
+  final int timelineStartUs;
+  final int durationUs;
+  final int relativeCutUs;
 }
 
 class _CleanPreviewCanvas extends StatelessWidget {

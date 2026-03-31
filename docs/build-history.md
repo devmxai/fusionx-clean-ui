@@ -10,6 +10,196 @@
 
 ## Releases
 
+### V59
+
+- APK name:
+  - `Fusion X V59 - Split Filmstrip Reference Reuse.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `SFR + DEL + RLS`
+- Meaning:
+  - `SFR` = split filmstrip reference reuse
+  - `DEL` = delete activation retained
+  - `RLS` = release APK build
+- Notes:
+  - split segments now reuse the original clip filmstrip as a shared reference
+    strip and crop it in place, so a cut no longer needs to regenerate the
+    right and left halves as if they were brand-new filmstrips
+  - when the original reference strip is already cached, both split halves stay
+    visually populated immediately instead of flashing black and refreshing
+    independently after every cut
+  - reorder cards now derive a local seconds-per-width mapping so split filmstrip
+    previews stay consistent while dragging
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V58
+
+- APK name:
+  - `Fusion X V58 - Instant Filmstrip Seeding and Delete Activation.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `IFS + DEL + RLS`
+- Meaning:
+  - `IFS` = instant filmstrip seeding
+  - `DEL` = delete activation
+  - `RLS` = release APK build
+- Notes:
+  - imported videos now seed timeline thumbnails from device poster bytes
+    immediately, and split clips can reuse frame cache synchronously before the
+    background filmstrip generation completes
+  - this reduces the black placeholder effect both on initial import and right
+    after cut operations, while still allowing the full segment filmstrip to
+    refine in the background
+  - delete is now available for any selected clip; if the last remaining clip
+    is deleted, the timeline returns to the empty import state
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V57
+
+- APK name:
+  - `Fusion X V57 - Split Scrub Recovery and Segment Selection.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `SSR + SEL + RLS`
+- Meaning:
+  - `SSR` = split scrub recovery
+  - `SEL` = segment selection
+  - `RLS` = release APK build
+- Notes:
+  - split segments now use exact duration-based timeline geometry for scrub and
+    playhead math instead of inheriting large decorative minimum widths, which
+    restores linear time mapping after a cut
+  - the split bridge is centered on the seam, selected split segments now show
+    a bright white pulsing border, and delete is wired for removing one side of
+    a two-part split clip
+  - video filmstrips no longer refresh only because play state changed, which
+    reduces unnecessary thumbnail churn around split timelines
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V56
+
+- APK name:
+  - `Fusion X V56 - Timeline Split Tool.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `TSP + BRG + RLS`
+- Meaning:
+  - `TSP` = timeline split
+  - `BRG` = split bridge mock
+  - `RLS` = release APK build
+- Notes:
+  - the Cut tool now splits the active timeline clip at the current playhead
+    position into two adjacent segments without changing the total playback
+    duration or shifting the clip on the timeline
+  - split segments preserve the same source asset and source offsets, so the
+    current playback/scrub path stays stable while the timeline becomes ready
+    for later transition work
+  - cut points now render with a subtle white marker and a centered translucent
+    bridge mock between the left and right segments to reserve the future
+    transition slot visually
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V55
+
+- APK name:
+  - `Fusion X V55 - Timeline Pinch Zoom.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `TPZ + FRC + RLS`
+- Meaning:
+  - `TPZ` = timeline pinch zoom
+  - `FRC` = frame-readout crossover
+  - `RLS` = release APK build
+- Notes:
+  - timeline zoom range is now much wider, so clips can be zoomed out enough to
+    see much more of the project at once or zoomed in far enough for
+    frame-level navigation
+  - pinch zoom now focuses around the finger position on the timeline instead
+    of snapping around the current playhead time only
+  - the top readout switches to frame-style time formatting at high zoom, while
+    the ruler already promotes frame labels when the visible scale becomes fine
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V54
+
+- APK name:
+  - `Fusion X V54 - Friction Release Glide.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `FRG + PHY + RLS`
+- Meaning:
+  - `FRG` = friction release glide
+  - `PHY` = physics-based release
+  - `RLS` = release APK build
+- Notes:
+  - release motion now uses a friction simulation instead of a timed
+    `animateTo` curve, so the fling starts from the actual release speed and
+    then slows down progressively rather than stopping on a fixed animation
+    schedule
+  - the carry distance still depends on swipe strength, but the slowdown phase
+    is now more gradual and editor-like, especially for fast release gestures
+  - this specifically targets the request that reverse or forward release
+    should feel like a quick start followed by a smooth, continuous deceleration
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V53
+
+- APK name:
+  - `Fusion X V53 - Tuned Inertial Reverse Release.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `TIR + DCC + RLS`
+- Meaning:
+  - `TIR` = tuned inertial release
+  - `DCC` = deceleration curve control
+  - `RLS` = release APK build
+- Notes:
+  - timeline release motion no longer uses a generic clamping scroll
+    simulation; it now uses a capped velocity lane and a tuned deceleration
+    curve intended to feel more editor-like when the finger lifts
+  - fast swipes now start with stronger carry and then ease out smoothly, while
+    lighter swipes still coast briefly without feeling jumpy
+  - the same inertial path is used in both directions so reverse release is no
+    longer dependent on raw scroll physics feel alone
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
+### V52
+
+- APK name:
+  - `Fusion X V52 - Inertial Timeline Scrub.apk`
+- Milestone label:
+  - `FusionX-Beta5`
+- Shorthand:
+  - `ITS + KFL + RLS`
+- Meaning:
+  - `ITS` = inertial timeline scrub
+  - `KFL` = kinetic fling
+  - `RLS` = release APK build
+- Notes:
+  - timeline scrub now captures finger release velocity and continues motion
+    with gradual deceleration instead of stopping abruptly when the finger lifts
+  - inertial motion is wired through the same timeline time and preview path,
+    so playback preview, playhead, and ruler continue together rather than as a
+    separate fake animation
+  - light swipes now coast briefly and slow down, while faster swipes continue
+    farther before settling
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check` passed
+
 ### V51
 
 - APK name:
