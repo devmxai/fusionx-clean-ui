@@ -11,17 +11,18 @@ goal is to grow that base into a professional mobile editor step by step.
 
 Current milestone:
 
-- `Beta 6`
-- this beta is the first timeline-editing handoff after the long
-  preview/scrub stabilization cycle
-- import, first-frame rendering, playback, seek, trim, bidirectional scrub,
-  inertial timeline release, pinch zoom, cut, selection, and basic split-delete
-  flow are now working inside the original product UI
-- split timelines now keep their filmstrip populated more naturally by reusing
-  the original strip as a shared reference instead of rebuilding both halves as
-  brand-new strips after every cut
-- the editor is now beyond “single clip playback demo” and has entered a
-  practical editing-foundation stage
+- `Beta 7`
+- this beta preserves the stable `Beta 6` single-clip foundation and adds the
+  first real engine-owned project model, project canvas authority, project-time
+  playback resolution, and adjacent runtime handoff work
+- first clip canvas locking, multi-clip append behavior, project-time clip
+  resolution, and basic adjacent playback continuation are now wired into the
+  native engine behind the original Flutter editor UI
+- seam continuity has improved compared with the earlier `Beta 6` baseline, but
+  `Phase 3` is still in progress and the handoff between clip 1 and clip 2 is
+  not yet final professional-quality seamless playback
+- the editor is now beyond a single-clip editing baseline and has entered the
+  first real multi-clip engine migration stage
 
 Built so far:
 
@@ -45,6 +46,21 @@ Built so far:
 - versioned APK workflow is in place
 - build history is tracked in
   [docs/build-history.md](/Users/mx/Documents/New%20project/fusionx-clean-ui/docs/build-history.md)
+
+## Execution Rules
+
+These migration rules are mandatory for all future work:
+
+- no patching outside the current phase just to appear faster
+- no jumping to later phases before the current phase is device-verified
+- no leaving a phase half-finished and then compensating from a later phase
+- only fix regressions early when they directly break already-working behavior
+- engine authority must keep moving downward into the native runtime; Flutter
+  must not regain playback ownership
+- after every completed phase:
+  - run validation
+  - build a `release APK`
+  - open the APK in Finder for device testing
 
 ## Architecture Direction
 
@@ -125,33 +141,34 @@ Not implemented yet:
 - image import into the playback engine
 - generalized delete/edit operations for arbitrary multi-segment timelines
 
-## Beta 6 Notes
+## Beta 7 Notes
 
-What `Beta 6` means:
+What `Beta 7` means:
 
 - the original product UI is still preserved as the only editor surface
-- Android preview/playback/trim/import remain stable enough to keep building on
-- the timeline is no longer limited to scrub only; it now has the first real
-  editing tools and interactions
-- split/cut behavior has become fast enough to use as a real editing action,
-  not just a visual mock
-- the repository now has a practical editing foundation for moving into the
-  next product layers
+- Android preview/playback/trim/import from `Beta 6` remain the protected
+  baseline
+- the engine now owns:
+  - project canvas locking
+  - project sync
+  - project-time playback resolution
+  - active clip runtime requests
+  - first adjacent clip handoff path
+- multi-clip import no longer behaves like a simple one-clip replace flow
+- `Phase 3` has started real adjacent runtime work, but seamless clip-to-clip
+  continuity is still not fully closed
 
 Main technical highlights of this beta cycle:
 
-- timeline inertial release was added and tuned to feel closer to mobile editor
-  behavior
-- timeline pinch zoom was added so the user can navigate by coarse seconds or
-  finer frame-level precision
-- split/cut was wired to the actual timeline model
-- split seams and transition bridge placeholders were added
-- selection highlighting and basic delete behavior were added for split
-  segments
-- import poster seeding reduced black placeholders on the timeline
-- split filmstrip reuse now keeps the left and right halves visually populated
-  by cropping a shared reference strip instead of regenerating both halves from
-  scratch after every cut
+- engine-owned project canvas and timeline project store were added
+- project-time resolution now returns active clip, clip-local time, source
+  offset, and adjacent clip information from native engine code
+- adjacent runtime handoff moved out of pure UI orchestration and into the
+  native playback path
+- Flutter timeline state no longer rewrites multi-clip seam semantics from late
+  runtime metadata events during handoff
+- clip selection, preview ownership, and seam stabilization work were advanced
+  without abandoning the original UI or the phase plan
 
 ## Known Limitations
 
@@ -160,6 +177,11 @@ Known issues in the current `Beta 6` baseline:
 - the preview metadata column still overflows at the default narrow widget-test
   viewport; this is the current open review finding in
   [fusionx_clean_ui_screen.dart](/Users/mx/Documents/New%20project/fusionx-clean-ui/lib/features/editor/presentation/screens/fusionx_clean_ui_screen.dart)
+- multi-clip seam continuity is improved but not finished yet; a visible handoff
+  pause/lag can still appear between clip 1 and clip 2 while `Phase 3`
+  continues
+- scrub and play around the exact seam are better than the earliest `Phase 3`
+  builds, but are not yet final production-grade behavior
 - multi-segment delete is not generalized yet; the current delete flow is meant
   for the basic split workflow rather than a full nonlinear project model
 - timeline polish can still improve for very fine micro-scrub feel and for
@@ -167,14 +189,16 @@ Known issues in the current `Beta 6` baseline:
 
 ## Next Phase
 
-The next major phase after `Beta 6` should focus on broader editor depth rather
-than re-solving the already-stabilized preview foundation:
+The next major work after this `Beta 7` snapshot is still to finish the current
+runtime phase before any larger engine leap:
 
-- audio phase 0
-- richer project and timeline structure
-- generalized clip edit operations beyond a single split pair
-- continued renderer and compositor evolution
-- export and later advanced editor behaviors
+- finish `Phase 3` seam continuity and adjacent runtime stability
+- complete `Phase 4` multi-clip scrub runtime
+- then discuss deeper engine choices such as:
+  - `C++` core migration
+  - Vulkan compositor
+  - possible BMF/BMFLite adoption
+  - multi-layer and transitions
 
 ## Repository Notes
 

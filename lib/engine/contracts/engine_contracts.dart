@@ -1,9 +1,11 @@
 import '../models/engine_time.dart';
+import '../models/project_sync_models.dart';
 
 enum FusionXEngineCommandType {
   attachRenderTarget,
   detachRenderTarget,
   loadClip,
+  syncProject,
   beginScrub,
   endScrub,
   play,
@@ -17,6 +19,7 @@ enum FusionXEngineCommandType {
 enum FusionXEngineEventType {
   ready,
   previewTargetChanged,
+  activeClipChanged,
   durationResolved,
   positionChanged,
   playbackStateChanged,
@@ -119,6 +122,18 @@ class LoadClipPayload {
     return <String, Object>{
       'path': path,
     };
+  }
+}
+
+class SyncProjectPayload {
+  const SyncProjectPayload({
+    required this.project,
+  });
+
+  final FusionXProjectSyncPayload project;
+
+  Map<String, Object?> toMap() {
+    return project.toMap();
   }
 }
 

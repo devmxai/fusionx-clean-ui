@@ -58,6 +58,25 @@ class FusionXEnginePlugin(
                     result.success(null)
                 }
 
+                "syncProject" -> {
+                    controller.syncProject(
+                        call.arguments<Map<String, Any?>>() ?: emptyMap(),
+                    )
+                    result.success(null)
+                }
+
+                "getProjectCanvas" -> {
+                    result.success(controller.currentProjectCanvasSnapshot())
+                }
+
+                "resolveProjectPlayback" -> {
+                    val timelineTimeUs = call.argument<Number>("timelineTimeUs")?.toLong()
+                        ?: 0L
+                    result.success(
+                        controller.resolveProjectPlaybackAtTimelineTimeUs(timelineTimeUs),
+                    )
+                }
+
                 "beginScrub" -> {
                     controller.beginScrub()
                     result.success(null)

@@ -63,6 +63,7 @@ class _TimelinePanelState extends State<TimelinePanel>
   static const double _rowGap = 6;
   static const double _controlTileSize = 36;
   static const double _controlGap = 6;
+  static const double _clipGap = 0;
   static const double _splitGap = 0;
   static const double _trailingPadding = 120;
   static const double _timeReadoutWidth = 96;
@@ -853,7 +854,7 @@ class _TimelinePanelState extends State<TimelinePanel>
           final next = track.clips[i + 1];
           final isSplitSibling = clip.splitGroupId != null &&
               clip.splitGroupId == next.splitGroupId;
-          clipsWidth += isSplitSibling ? _splitGap : _controlGap;
+          clipsWidth += isSplitSibling ? _splitGap : _clipGap;
         }
         return math.max(maxWidth, clipsWidth);
       },
@@ -1137,8 +1138,9 @@ class _TimelinePanelState extends State<TimelinePanel>
                                                           _leadingOffset,
                                                       controlTileSize:
                                                           _controlTileSize,
-                                                      controlGap: _controlGap,
-                                                      splitGap: _splitGap,
+                      controlGap: _controlGap,
+                      clipGap: _clipGap,
+                      splitGap: _splitGap,
                                                       rowHeight: _rowHeight,
                                                       secondsWidth:
                                                           _secondsWidth,
@@ -1241,6 +1243,7 @@ class _TimelineTrackRow extends StatelessWidget {
     required this.leadingOffset,
     required this.controlTileSize,
     required this.controlGap,
+    required this.clipGap,
     required this.splitGap,
     required this.rowHeight,
     required this.secondsWidth,
@@ -1259,6 +1262,7 @@ class _TimelineTrackRow extends StatelessWidget {
   final double leadingOffset;
   final double controlTileSize;
   final double controlGap;
+  final double clipGap;
   final double splitGap;
   final double rowHeight;
   final double secondsWidth;
@@ -1422,7 +1426,7 @@ class _TimelineTrackRow extends StatelessWidget {
           );
           cursor += clipWidth + splitGap;
         } else {
-          cursor += clipWidth + controlGap;
+          cursor += clipWidth + clipGap;
         }
       } else {
         cursor += clipWidth;

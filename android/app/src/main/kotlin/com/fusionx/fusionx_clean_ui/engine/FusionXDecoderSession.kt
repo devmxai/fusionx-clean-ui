@@ -13,6 +13,14 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
+data class FusionXPlaybackContinuation(
+    val path: String,
+    val trimStartUs: Long,
+    val trimEndUs: Long,
+    val initialClipLocalTimeUs: Long,
+    val timelineOffsetUs: Long,
+)
+
 class FusionXDecoderSession(
     private val applicationContext: Context,
     private val renderTarget: FusionXRenderTarget,
@@ -21,12 +29,16 @@ class FusionXDecoderSession(
     private val timeMapper: FusionXMediaTimeMapper = FusionXMediaTimeMapper.Identity,
     private val announceClipLoaded: Boolean = true,
     private val onClipPrepared: (() -> Unit)? = null,
+    private val onClipWindowActivated: (() -> Unit)? = null,
+    private val onPlaybackCompleted: (() -> FusionXPlaybackContinuation?)? = null,
     private val renderInitialFrameOnLoad: Boolean = true,
     private val resizeRenderTargetOnLoad: Boolean = true,
     private val scrubForwardContinuationWindowUs: Long = SCRUB_FORWARD_CONTINUATION_WINDOW_US,
     private val scrubProgressiveTargetWindowUs: Long = SCRUB_PROGRESSIVE_TARGET_WINDOW_US,
     private val scrubSeekMode: Int = MediaExtractor.SEEK_TO_PREVIOUS_SYNC,
     private val reverseScrubPrerollUs: Long = 0L,
+    private var publishesPlaybackState: Boolean = true,
+    private var publishesErrorEvents: Boolean = true,
 ) {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val resourceLock = Any()
@@ -51,6 +63,50 @@ class FusionXDecoderSession(
         }
     }
 
+    fun loadClipWindow(
+        path: String,
+        trimStartUs: Long,
+        trimEndUs: Long,
+        initialClipLocalTimeUs: Long = 0L,
+        autoplay: Boolean = false,
+        timelineOffsetUs: Long? = null,
+    ) {
+        submitReplacingCurrentTask {
+            releaseCodecResourcesInternal()
+            loadClipInternal(
+                path = path,
+                updateTransportMetadata = true,
+                emitClipLoadedEvents = false,
+                renderInitialFrame = false,
+            )
+            timelineOffsetUs?.let(transport::setTimelineOffsetUs)
+            activateClipWindowInternal(
+                trimStartUs = trimStartUs,
+                trimEndUs = trimEndUs,
+                initialClipLocalTimeUs = initialClipLocalTimeUs,
+                autoplay = autoplay,
+            )
+        }
+    }
+
+    fun activateClipWindow(
+        trimStartUs: Long,
+        trimEndUs: Long,
+        initialClipLocalTimeUs: Long = 0L,
+        autoplay: Boolean = false,
+        timelineOffsetUs: Long? = null,
+    ) {
+        submitReplacingCurrentTask {
+            timelineOffsetUs?.let(transport::setTimelineOffsetUs)
+            activateClipWindowInternal(
+                trimStartUs = trimStartUs,
+                trimEndUs = trimEndUs,
+                initialClipLocalTimeUs = initialClipLocalTimeUs,
+                autoplay = autoplay,
+            )
+        }
+    }
+
     fun play() {
         submitReplacingCurrentTask {
             playInternal()
@@ -60,19 +116,19 @@ class FusionXDecoderSession(
     fun pause() {
         cancelActiveTask()
         cancelScrubTask()
-        transport.setPlaybackState(FusionXPlaybackState.PAUSED)
+        updatePlaybackState(FusionXPlaybackState.PAUSED)
     }
 
     fun seekToTimelineTimeUs(timelineTimeUs: Long) {
         val resumePlayback = transport.currentPlaybackState() == FusionXPlaybackState.PLAYING
         submitReplacingCurrentTask {
-            transport.setPlaybackState(FusionXPlaybackState.SEEKING)
+            updatePlaybackState(FusionXPlaybackState.SEEKING)
             val targetSourceTimeUs = transport.timelineToSourceTimeUs(timelineTimeUs)
             renderFrameAtSourceTimeUsInternal(targetSourceTimeUs)
             if (resumePlayback) {
                 playInternal()
             } else {
-                transport.setPlaybackState(FusionXPlaybackState.PAUSED)
+                updatePlaybackState(FusionXPlaybackState.PAUSED)
             }
         }
     }
@@ -98,7 +154,7 @@ class FusionXDecoderSession(
             if (resumePlayback) {
                 playInternal()
             } else {
-                transport.setPlaybackState(FusionXPlaybackState.PAUSED)
+                updatePlaybackState(FusionXPlaybackState.PAUSED)
             }
         }
     }
@@ -113,6 +169,12 @@ class FusionXDecoderSession(
         } catch (_: Throwable) {
         } finally {
             executor.shutdownNow()
+        }
+    }
+
+    fun currentClipPath(): String? {
+        synchronized(resourceLock) {
+            return clipPath
         }
     }
 
@@ -137,8 +199,8 @@ class FusionXDecoderSession(
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (throwable: Throwable) {
-                transport.setPlaybackState(FusionXPlaybackState.ERROR)
-                emitError(
+                updatePlaybackState(FusionXPlaybackState.ERROR)
+                emitErrorIfEnabled(
                     throwable.message ?: "Unknown decoder error",
                 )
             }
@@ -173,8 +235,8 @@ class FusionXDecoderSession(
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (throwable: Throwable) {
-                transport.setPlaybackState(FusionXPlaybackState.ERROR)
-                emitError(
+                updatePlaybackState(FusionXPlaybackState.ERROR)
+                emitErrorIfEnabled(
                     throwable.message ?: "Unknown decoder error",
                 )
             } finally {
@@ -199,7 +261,7 @@ class FusionXDecoderSession(
             var currentDecodedSourceTimeUs = transport.currentSourcePositionUs()
             var streamCanContinue = canContinueDecoderFrom(currentDecodedSourceTimeUs)
 
-            transport.setPlaybackState(FusionXPlaybackState.PAUSED)
+            updatePlaybackState(FusionXPlaybackState.PAUSED)
             while (!Thread.currentThread().isInterrupted) {
                 if (!streamCanContinue ||
                     shouldReprepareScrub(
@@ -388,7 +450,12 @@ class FusionXDecoderSession(
         throw InterruptedException()
     }
 
-    private fun loadClipInternal(path: String) {
+    private fun loadClipInternal(
+        path: String,
+        updateTransportMetadata: Boolean = announceClipLoaded,
+        emitClipLoadedEvents: Boolean = announceClipLoaded,
+        renderInitialFrame: Boolean = renderInitialFrameOnLoad,
+    ) {
         val localExtractor = MediaExtractor()
         if (path.startsWith("content://") || path.startsWith("file://")) {
             localExtractor.setDataSource(applicationContext, Uri.parse(path), null)
@@ -427,20 +494,29 @@ class FusionXDecoderSession(
         }
 
         val durationUs = format.getLongSafely(MediaFormat.KEY_DURATION, 0L)
-        if (announceClipLoaded) {
-            transport.onClipLoaded(
-                sourceDurationUs = durationUs,
-                sourceWidth = width,
-                sourceHeight = height,
-                sourceFrameRate = frameRate,
-            )
+        if (updateTransportMetadata) {
+            if (emitClipLoadedEvents) {
+                transport.onClipLoaded(
+                    sourceDurationUs = durationUs,
+                    sourceWidth = width,
+                    sourceHeight = height,
+                    sourceFrameRate = frameRate,
+                )
+            } else {
+                transport.updateSourceMetadata(
+                    sourceDurationUs = durationUs,
+                    sourceWidth = width,
+                    sourceHeight = height,
+                    sourceFrameRate = frameRate,
+                )
+            }
         }
-        if (renderInitialFrameOnLoad) {
+        if (renderInitialFrame) {
             renderFrameAtSourceTimeUsInternal(transport.currentTrimStartUs())
         }
         onClipPrepared?.invoke()
-        if (announceClipLoaded) {
-            transport.setPlaybackState(FusionXPlaybackState.PAUSED)
+        if (emitClipLoadedEvents) {
+            updatePlaybackState(FusionXPlaybackState.PAUSED)
         }
     }
 
@@ -459,7 +535,8 @@ class FusionXDecoderSession(
         if (!canContinueDecoderFrom(playbackStartSourceTimeUs)) {
             prepareCodecForSourceTimeUs(playbackStartSourceTimeUs)
         }
-        transport.setPlaybackState(FusionXPlaybackState.PLAYING)
+        ensureNotInterrupted()
+        updatePlaybackState(FusionXPlaybackState.PLAYING)
 
         val outputBufferInfo = MediaCodec.BufferInfo()
         var inputEnded = false
@@ -492,8 +569,7 @@ class FusionXDecoderSession(
                         frameSourceTimeUs > trimEndUs
                     ) {
                         activeDecoder.releaseOutputBuffer(outputIndex, false)
-                        transport.setSourcePositionUs(trimEndUs)
-                        transport.setPlaybackState(FusionXPlaybackState.COMPLETED)
+                        completePlaybackAtTrimEnd(trimEndUs)
                         return
                     }
 
@@ -516,6 +592,7 @@ class FusionXDecoderSession(
 
                 outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
                     if (inputEnded) {
+                        completePlaybackAtTrimEnd(trimEndUs)
                         return
                     }
                 }
@@ -585,6 +662,66 @@ class FusionXDecoderSession(
                 outputIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
             }
         }
+    }
+
+    private fun activateClipWindowInternal(
+        trimStartUs: Long,
+        trimEndUs: Long,
+        initialClipLocalTimeUs: Long,
+        autoplay: Boolean,
+    ) {
+        val clampedTrimStartUs = trimStartUs.coerceAtLeast(0L)
+        val clampedTrimEndUs = trimEndUs.coerceAtLeast(clampedTrimStartUs)
+        val targetSourceTimeUs =
+            (clampedTrimStartUs + initialClipLocalTimeUs)
+                .coerceIn(clampedTrimStartUs, clampedTrimEndUs)
+        val trimWindowChanged =
+            transport.currentTrimStartUs() != clampedTrimStartUs ||
+                transport.currentTrimEndUs() != clampedTrimEndUs
+        if (trimWindowChanged) {
+            transport.setTrimWindow(
+                trimStartUs = clampedTrimStartUs,
+                trimEndUs = clampedTrimEndUs,
+                anchorSourceTimeUs = targetSourceTimeUs,
+                emitEvents = false,
+            )
+        }
+        renderFrameAtSourceTimeUsInternal(
+            targetSourceTimeUs,
+            emitPositionEvent = !trimWindowChanged,
+        )
+        if (trimWindowChanged) {
+            transport.emitTrimWindowState()
+        }
+        onClipWindowActivated?.invoke()
+        if (autoplay) {
+            playInternal()
+        } else {
+            updatePlaybackState(FusionXPlaybackState.PAUSED)
+        }
+    }
+
+    private fun completePlaybackAtTrimEnd(trimEndUs: Long) {
+        transport.setSourcePositionUs(trimEndUs)
+        val continuation = onPlaybackCompleted?.invoke()
+        if (continuation != null) {
+            releaseCodecResourcesInternal()
+            loadClipInternal(
+                path = continuation.path,
+                updateTransportMetadata = true,
+                emitClipLoadedEvents = false,
+                renderInitialFrame = false,
+            )
+            transport.setTimelineOffsetUs(continuation.timelineOffsetUs)
+            activateClipWindowInternal(
+                trimStartUs = continuation.trimStartUs,
+                trimEndUs = continuation.trimEndUs,
+                initialClipLocalTimeUs = continuation.initialClipLocalTimeUs,
+                autoplay = true,
+            )
+            return
+        }
+        updatePlaybackState(FusionXPlaybackState.COMPLETED)
     }
 
     private fun prepareCodecForSourceTimeUs(
@@ -757,7 +894,17 @@ class FusionXDecoderSession(
         }
     }
 
-    private fun emitError(message: String) {
+    private fun updatePlaybackState(nextState: FusionXPlaybackState) {
+        if (!publishesPlaybackState) {
+            return
+        }
+        transport.setPlaybackState(nextState)
+    }
+
+    private fun emitErrorIfEnabled(message: String) {
+        if (!publishesErrorEvents) {
+            return
+        }
         events.emit(
             "error",
             mapOf("message" to message),

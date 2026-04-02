@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../contracts/engine_contracts.dart';
+import '../models/project_playback_models.dart';
+import '../models/project_sync_models.dart';
 import 'fusionx_engine_bridge.dart';
 
 class MethodChannelFusionXEngineBridge implements FusionXEngineBridge {
@@ -48,6 +50,39 @@ class MethodChannelFusionXEngineBridge implements FusionXEngineBridge {
       ).toMap(),
     );
     return AttachRenderTargetResult.fromMap(
+      raw ?? const <Object?, Object?>{},
+    );
+  }
+
+  @override
+  Future<void> syncProject(FusionXProjectSyncPayload payload) async {
+    await _methodChannel.invokeMethod<void>(
+      FusionXEngineCommandType.syncProject.name,
+      payload.toMap(),
+    );
+  }
+
+  @override
+  Future<FusionXProjectCanvasSnapshot> getProjectCanvas() async {
+    final raw = await _methodChannel.invokeMethod<Map<Object?, Object?>>(
+      'getProjectCanvas',
+    );
+    return FusionXProjectCanvasSnapshot.fromMap(
+      raw ?? const <Object?, Object?>{},
+    );
+  }
+
+  @override
+  Future<FusionXProjectPlaybackSnapshot> resolveProjectPlayback(
+    int timelineTimeUs,
+  ) async {
+    final raw = await _methodChannel.invokeMethod<Map<Object?, Object?>>(
+      'resolveProjectPlayback',
+      <String, Object?>{
+        'timelineTimeUs': timelineTimeUs,
+      },
+    );
+    return FusionXProjectPlaybackSnapshot.fromMap(
       raw ?? const <Object?, Object?>{},
     );
   }

@@ -140,6 +140,9 @@ class FusionXScrubSession(
     }
 
     fun stopAndDrain(timeoutMs: Long = 250L) {
+        synchronized(lock) {
+            pendingTimelineTimeUs = null
+        }
         proxySession?.stopAndDrainScrub(timeoutMs)
     }
 
@@ -202,6 +205,8 @@ class FusionXScrubSession(
                     scrubProgressiveTargetWindowUs = PROXY_SCRUB_PROGRESSIVE_TARGET_WINDOW_US,
                     scrubSeekMode = MediaExtractor.SEEK_TO_CLOSEST_SYNC,
                     reverseScrubPrerollUs = PROXY_REVERSE_SCRUB_PREROLL_US,
+                    publishesPlaybackState = false,
+                    publishesErrorEvents = false,
                 )
                 sessionForReplay = nextSession
                 val shouldDiscard = synchronized(lock) {
@@ -265,6 +270,6 @@ class FusionXScrubSession(
     companion object {
         private const val PROXY_SCRUB_FORWARD_CONTINUATION_WINDOW_US = 1_500_000L
         private const val PROXY_SCRUB_PROGRESSIVE_TARGET_WINDOW_US = 900_000L
-        private const val PROXY_REVERSE_SCRUB_PREROLL_US = 0L
+        private const val PROXY_REVERSE_SCRUB_PREROLL_US = 180_000L
     }
 }

@@ -112,6 +112,8 @@ class _NativeSingleClipPlaybackFoundationScreenState
           _textureId =
               (event.payload['textureId'] as num?)?.toInt() ?? _textureId;
         });
+      case FusionXEngineEventType.activeClipChanged:
+        break;
       case FusionXEngineEventType.durationResolved:
         final sourceDurationUs =
             (event.payload['sourceDurationUs'] as num?)?.toInt() ?? 0;

@@ -10,6 +10,602 @@
 
 ## Releases
 
+### Beta 7 Source Snapshot
+
+- Source milestone:
+  - `FusionX-Beta7`
+- Meaning:
+  - the current repository source snapshot now moves beyond the protected
+    `Beta 6` baseline and preserves the accumulated `Phase 0` to `Phase 3`
+    engine migration work as the new GitHub mainline
+- Notes:
+  - single-clip editing baseline from `Beta 6` is preserved
+  - engine-owned project model, canvas authority, and project-time resolution
+    are included
+  - adjacent runtime handoff work is included, but `Phase 3` remains in
+    progress and seam continuity is not considered final yet
+
+### V108
+
+- APK name:
+  - `Fusion X V108 - Phase 3 Multi Clip Metadata Freeze.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + MCF + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `MCF` = multi-clip metadata freeze
+  - `RLS` = release APK build
+- Notes:
+  - multi-clip `durationResolved` and `trimChanged` events no longer reset the
+    Flutter timeline time, preview time, or scrub state during seam handoff
+  - the Flutter timeline model also stops rewriting clip metadata from runtime
+    duration/trim events while more than one clip exists, which keeps seam
+    tools and playhead semantics anchored to the project model instead of late
+    clip-load events
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V107
+
+- APK name:
+  - `Fusion X V107 - Phase 3 Adjacent Prewarm Rollback.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + APR + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `APR` = adjacent prewarm rollback
+  - `RLS` = release APK build
+- Notes:
+  - rolled back the `V106` adjacent prewarm experiment after it regressed seam
+    completion and made scrub stability worse on device
+  - Phase 3 now returns to the safer single-session continuation path from
+    `V105` while keeping the rest of the project-time handoff work intact
+  - this is a targeted regression fix inside the current phase, not a phase
+    change
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V106
+
+- APK name:
+  - `Fusion X V106 - Phase 3 Adjacent Prewarm.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + APW + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `APW` = adjacent prewarm
+  - `RLS` = release APK build
+- Notes:
+  - playback runtime now keeps an adjacent decoder session preloaded with the
+    next clip path when a valid next clip exists
+  - seam handoff first tries to promote the prewarmed adjacent session instead
+    of forcing a full decoder reload exactly at clip boundary
+  - fallback to the older internal continuation path remains in place if the
+    adjacent preload is unavailable, so this stays a Phase 3 seam-lag reduction
+    rather than a brittle hard cutover
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V105
+
+- APK name:
+  - `Fusion X V105 - Phase 3 Regression Rollback.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + RRB + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `RRB` = regression rollback
+  - `RLS` = release APK build
+- Notes:
+  - rolled back the `V103/V104` decoder-confirmed ownership path that made seam
+    playback materially worse on device
+  - active clip publication and scrub completion now return to the more stable
+    `V102` behavior while Phase 3 remains in progress
+  - this is a stability restore inside the same phase, not a phase change
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V104
+
+- APK name:
+  - `Fusion X V104 - Phase 3 Preview Handoff Regression Fix.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + PHR + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `PHR` = preview handoff regression
+  - `RLS` = release APK build
+- Notes:
+  - fixed a `V103` regression where preview asset switching could wait for a
+    first-frame event that had already fired before decoder-confirmed
+    `activeClipChanged`, leaving the seam rendered with the wrong clip aspect
+  - decoder-confirmed activation remains in place, but preview aspect ownership
+    now follows the confirmed active clip immediately instead of stalling on the
+    old display asset
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V103
+
+- APK name:
+  - `Fusion X V103 - Phase 3 Decoder Confirmed Handoff.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + DCH + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `DCH` = decoder-confirmed handoff
+  - `RLS` = release APK build
+- Notes:
+  - controller no longer announces the target clip as active before decoder
+    activation actually finishes; active clip ownership now commits only after a
+    confirmed clip-window activation callback
+  - Flutter scrub release now waits for a real runtime acknowledgment instead
+    of clearing handoff pending as soon as the bridge call returns
+  - seam-exact split/tool resolution now uses the same normalized boundary time
+    semantics as scrub/playback, so the seam is less likely to appear as a dead
+    zone in the UI
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+### V102
+
+- APK name:
+  - `Fusion X V102 - Phase 3 Seam Boundary and Handoff Stabilization.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + SBH + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SBH` = seam boundary and handoff stabilization
+  - `RLS` = release APK build
+- Notes:
+  - exact seam positions are now biased one frame into the intended clip during
+    scrub/seek handling instead of leaving the playhead on the ambiguous shared
+    boundary
+  - play toggles now wait for scrub handoff completion, not only scrub
+    settling, before dispatching `play`
+  - timeline offset now shifts inside decoder activation/handoff work instead
+    of jumping early on the controller thread
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V101
+
+- APK name:
+  - `Fusion X V101 - Phase 3 Decoder Path Alignment.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + DPA + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `DPA` = decoder path alignment
+  - `RLS` = release APK build
+- Notes:
+  - play, seek, scrub, and end-scrub now validate against the clip path
+    actually loaded inside the decoder session instead of trusting the
+    controller's optimistic active-request state alone
+  - this targets the delayed or ignored first play tap after cross-clip scrub
+    and reduces stale clip ownership after seam handoff
+  - leaving scrub now clears any pending proxy replay before playback resumes,
+    which prevents late scrub completions from clobbering the first play press
+    after returning from clip 2 to clip 1
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V100
+
+- APK name:
+  - `Fusion X V100 - Phase 3 Seam Ownership Isolation.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + SOI + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SOI` = seam ownership isolation
+  - `RLS` = release APK build
+- Notes:
+  - scrub proxy decoder sessions no longer publish global playback or error
+    state into the shared transport
+  - adjacent clips are now rendered without a fake visible gap in the timeline
+    geometry, so scrub/playhead mapping stays continuous across the seam
+  - Flutter seam anchoring now matches the engine's half-open clip boundary
+    semantics
+  - multi-clip runtime metadata events no longer resync the whole project back
+    into the engine during seam playback
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V99
+
+- APK name:
+  - `Fusion X V99 - Phase 3 User Selection and Canvas Chrome Fix.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + USC + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `USC` = user selection and canvas chrome
+  - `RLS` = release APK build
+- Notes:
+  - clip border selection is now manual-only instead of auto-following runtime
+    handoff between adjacent clips
+  - toolbar selection state no longer needs to flicker between active and
+    inactive while playback crosses the seam
+  - preview chrome now uses lighter rounding and tighter margins so the canvas
+    fills more of the visible stage area
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V98
+
+- APK name:
+  - `Fusion X V98 - Phase 3 Preview Aspect Handoff Fix.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + PAH + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `PAH` = preview aspect handoff
+  - `RLS` = release APK build
+- Notes:
+  - preview sizing no longer switches to the next clip's aspect ratio until the
+    first rendered frame of that clip actually arrives
+  - this reduces the seam flash where the last frame of clip 1 visually shrank
+    or stretched to match clip 2 before the real handoff frame was shown
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V97
+
+- APK name:
+  - `Fusion X V97 - Phase 3 Seam Scrub Activation.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + SSA + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SSA` = seam scrub activation
+  - `RLS` = release APK build
+- Notes:
+  - cross-clip scrub now resolves the target clip immediately when the playhead
+    crosses the seam instead of waiting until scrub release to switch runtime
+    ownership
+  - seam-area preview should no longer stay visually anchored to the previous
+    clip while scrubbing into the next clip
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V96
+
+- APK name:
+  - `Fusion X V96 - Phase 3 Clip Start Reset Fix.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + CSR + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `CSR` = clip start reset fix
+  - `RLS` = release APK build
+- Notes:
+  - playback handoff and end-of-scrub clip switching no longer re-emit a fresh
+    clip load from source zero before the target trim window is activated
+  - transport metadata can now update silently during clip-window activation,
+    so cross-clip scrub release avoids the visible jump to clip start before
+    restoring the final target frame
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V95
+
+- APK name:
+  - `Fusion X V95 - Phase 3 Runtime Selection Split.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + SEL + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SEL` = runtime selection split
+  - `RLS` = release APK build
+- Notes:
+  - Flutter now tracks engine-active clip state separately from user timeline
+    selection, so runtime handoff no longer forces the selected clip to jump
+    during playback and scrub
+  - preview metadata and active-clip timeline updates now follow engine-active
+    clip ownership without stealing manual timeline selection
+  - preview asset resolution now follows the engine-active clip first, which
+    keeps canvas content and runtime state aligned while the selected clip stays
+    under user control
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V94
+
+- APK name:
+  - `Fusion X V94 - Phase 3 Timeline Time and Reverse Scrub Pass.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + TLT + RVS + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `TLT` = timeline time payload fix
+  - `RVS` = reverse scrub stability
+  - `RLS` = release APK build
+- Notes:
+  - trim and duration events now include project timeline time so multi-clip
+    scrub no longer momentarily falls back to `0` before restoring the real
+    position
+  - reverse scrub now uses preroll to reduce harsh back-step reprepare behavior
+  - playback render target resizing is held stable across clip changes to
+    reduce black flicker during adjacent hard cuts
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V93
+
+- APK name:
+  - `Fusion X V93 - Phase 3 Single Clip Scrub Release Fix.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + SCR + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SCR` = scrub release fix
+  - `RLS` = release APK build
+- Notes:
+  - releasing scrub on the same clip no longer re-applies an unchanged trim
+    window and reset the playhead back to zero
+  - this restores stable single-clip scrub release behavior while preserving
+    the project-time multi-clip handoff work already in phase 3
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V92
+
+- APK name:
+  - `Fusion X V92 - Phase 3 Inline Handoff and Scrub Return.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + IHF + SRT + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `IHF` = inline handoff
+  - `SRT` = scrub return targeting
+  - `RLS` = release APK build
+- Notes:
+  - adjacent clip continuation no longer waits for a delayed controller post;
+    the active decoder session now chains directly into the next resolved clip
+  - ending a scrub now resolves the project-time target clip and reactivates
+    that clip instead of snapping back into the previously active one
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V91
+
+- APK name:
+  - `Fusion X V91 - Phase 3 Completion Handoff Fix.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + EOF + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `EOF` = end-of-clip completion fix
+  - `RLS` = release APK build
+- Notes:
+  - decoder playback now routes both explicit EOS frames and silent
+    post-input-drain completion through the same handoff path
+  - this closes the case where clip 1 reached its end, returned from playback,
+    and never invoked the clip 2 continuation logic
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V90
+
+- APK name:
+  - `Fusion X V90 - Phase 3 Timeline Stability Pass.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + STL + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `STL` = timeline stability pass
+  - `RLS` = release APK build
+- Notes:
+  - multi-clip duration and trim events no longer reset the global playhead back
+    to clip-local zero when the active clip changes
+  - timeline scrub clamping now uses project duration across multiple clips
+    instead of collapsing to the currently active clip window
+  - scrub session reload now follows the active clip path so scrub authority
+    stays aligned with playback authority after a handoff or cross-clip seek
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V89
+
+- APK name:
+  - `Fusion X V89 - Phase 3 Adjacent Runtime Handoff.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P3 + HOF + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `HOF` = adjacent runtime handoff
+  - `RLS` = release APK build
+- Notes:
+  - playback transport now carries a project timeline offset so timeline time
+    remains continuous when the active clip changes
+  - the engine now owns an active resolved playback request and can activate the
+    next adjacent clip when the current clip reaches end-of-stream
+  - an `activeClipChanged` engine event now informs Flutter which clip/runtime
+    became active, instead of leaving that ownership implicit in local UI state
+  - this phase targets hard-cut continuation only; decoder-pool prewarm and
+    multi-clip scrub across boundaries remain for later phases
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V88
+
+- APK name:
+  - `Fusion X V88 - Phase 2 Project Time Authority.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P2 + PTA + RLS`
+- Meaning:
+  - `P2` = phase 2
+  - `PTA` = project time authority
+  - `RLS` = release APK build
+- Notes:
+  - Android engine now resolves active clip / local clip time / source time /
+    next clip from project timeline time instead of leaving that mapping purely
+    in Flutter state
+  - Flutter can now request a resolved project playback snapshot from the
+    engine, which establishes the authority layer needed before decoder-pool
+    runtime work starts
+  - this phase still does not attempt seamless runtime handoff yet; it prepares
+    the resolver that `Phase 3` will consume
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V87
+
+- APK name:
+  - `Fusion X V87 - Phase 1 Canvas Fit and Append Stability.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P1 + FIT + APP + RLS`
+- Meaning:
+  - `P1` = phase 1 follow-up
+  - `FIT` = fixed canvas-fit behavior
+  - `APP` = append stability
+  - `RLS` = release APK build
+- Notes:
+  - importing a second clip no longer auto-replaces the current single-clip
+    playback runtime during `Phase 1`; it appends into the project model only
+  - preview rendering now uses clip aspect containment inside the locked project
+    canvas instead of stretching the texture to fill the canvas bounds
+  - this keeps `Phase 1` scoped to project-model and canvas authority only,
+    while avoiding regressions where the first clip became effectively
+    inaccessible immediately after append
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V86
+
+- APK name:
+  - `Fusion X V86 - Phase 1 Engine Project Model.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P1 + PCM + RLS`
+- Meaning:
+  - `P1` = phase 1
+  - `PCM` = project canvas model
+  - `RLS` = release APK build
+- Notes:
+  - Android engine now owns a project store with first-visual-clip canvas lock
+  - Flutter now syncs project tracks/clips into the engine instead of treating
+    every metadata event as permission to rebuild the timeline back to one clip
+  - timeline imports now append clip instances in the UI model, while canvas
+    dimensions are refreshed from engine-owned authority snapshots
+  - this phase does not replace playback runtime yet; it establishes project
+    model and canvas authority only
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+
+### V85
+
+- APK name:
+  - `Fusion X V85 - Phase 0 Baseline Lock.apk`
+- Milestone label:
+  - `FusionX-Beta6`
+- Shorthand:
+  - `P0 + RSP + RLS`
+- Meaning:
+  - `P0` = phase 0 baseline lock
+  - `RSP` = responsive surface panel fallback
+  - `RLS` = release APK build
+- Notes:
+  - compact and split-screen viewport fallback was added to the main editor
+    layout so the preview/workspace column no longer overflows under the narrow
+    widget-test viewport
+  - preview overlay labels and status readouts now collapse with ellipsis in
+    constrained canvas sizes instead of forcing a `RenderFlex` overflow
+  - `docs/phase-0-baseline-lock.md` now records the migration rule that the
+    current decoder path is the protected `single_clip_runtime`, and that all
+    future multi-clip / multi-layer authority must move into the engine first
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart` passed
+
 ### V59
 
 - APK name:
