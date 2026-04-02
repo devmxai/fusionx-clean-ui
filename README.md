@@ -11,8 +11,11 @@ goal is to grow that base into a professional mobile editor step by step.
 
 Current milestone:
 
-- `Beta 7`
-- this beta preserves the stable `Beta 6` single-clip foundation and adds the
+- `Beta 8`
+- this beta preserves the stable `Beta 6` single-clip foundation and carries
+  forward the `Beta 7` project-time and adjacent-runtime work while keeping the
+  mainline on the more stable `V108` / `V110` Phase 3 behavior
+- it adds the
   first real engine-owned project model, project canvas authority, project-time
   playback resolution, and adjacent runtime handoff work
 - first clip canvas locking, multi-clip append behavior, project-time clip
@@ -141,13 +144,15 @@ Not implemented yet:
 - image import into the playback engine
 - generalized delete/edit operations for arbitrary multi-segment timelines
 
-## Beta 7 Notes
+## Beta 8 Notes
 
-What `Beta 7` means:
+What `Beta 8` means:
 
 - the original product UI is still preserved as the only editor surface
 - Android preview/playback/trim/import from `Beta 6` remain the protected
   baseline
+- the repository mainline now keeps the more stable `V108` / `V110` seam and
+  scrub behavior rather than carrying forward the unfinished `V111` experiment
 - the engine now owns:
   - project canvas locking
   - project sync
@@ -172,7 +177,7 @@ Main technical highlights of this beta cycle:
 
 ## Known Limitations
 
-Known issues in the current `Beta 6` baseline:
+Known issues in the current `Beta 8` baseline:
 
 - the preview metadata column still overflows at the default narrow widget-test
   viewport; this is the current open review finding in
@@ -189,7 +194,7 @@ Known issues in the current `Beta 6` baseline:
 
 ## Next Phase
 
-The next major work after this `Beta 7` snapshot is still to finish the current
+The next major work after this `Beta 8` snapshot is still to finish the current
 runtime phase before any larger engine leap:
 
 - finish `Phase 3` seam continuity and adjacent runtime stability

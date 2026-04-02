@@ -165,6 +165,13 @@ authority to continue playback from one clip into the next.
   timeline state or reset scrub dispatch bookkeeping while more than one clip
   exists, because those late metadata events were making the seam look like a
   temporary empty zone even though engine project time remained continuous.
+- `V109` proved too optimistic for the current runtime: queueing `Play`
+  through scrub completion made playback worse on device, so that experiment is
+  rolled back in the next stability pass and Phase 3 returns to the earlier
+  direct toggle path while play responsiveness is addressed deeper in runtime.
+- `Beta 8` intentionally keeps the more stable `V108` / `V110` runtime path as
+  the mainline while Phase 3 continues, instead of promoting the unfinished
+  `V111` scrub-play experiment into the source snapshot.
 
 ## What This Phase Still Does Not Solve
 

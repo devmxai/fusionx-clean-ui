@@ -10,6 +10,68 @@
 
 ## Releases
 
+### Beta 8 Source Snapshot
+
+- Source milestone:
+  - `FusionX-Beta8`
+- Meaning:
+  - the current repository source snapshot keeps the `Beta 7` Phase 3 runtime
+    migration path, but stabilizes the mainline around the more reliable
+    `V108` / `V110` seam behavior instead of carrying forward the unfinished
+    `V111` scrub-play experiment
+- Notes:
+  - single-clip editing from `Beta 6` and the earlier `Beta 7` project-time
+    migration remains preserved
+  - multi-clip seam continuity is improved compared with the original
+    `Beta 6` baseline, but `Phase 3` is still intentionally open
+  - the current stable release reference for this snapshot is
+    `Fusion X V110 - Phase 3 Scrub Resume Queue Rollback.apk`
+
+### V110
+
+- APK name:
+  - `Fusion X V110 - Phase 3 Scrub Resume Queue Rollback.apk`
+- Milestone label:
+  - `FusionX-Beta8`
+- Shorthand:
+  - `P3 + SQR + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SQR` = scrub queue rollback
+  - `RLS` = release APK build
+- Notes:
+  - rolled back the `V109` queued play-after-scrub experiment after it made
+    `play/pause` materially worse on device
+  - `scrub -> play` now returns to the `V108` direct toggle behavior while
+    Phase 3 continues from the more stable baseline
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
+### V109
+
+- APK name:
+  - `Fusion X V109 - Phase 3 Scrub Resume Queue.apk`
+- Milestone label:
+  - `FusionX-Beta8`
+- Shorthand:
+  - `P3 + SRQ + RLS`
+- Meaning:
+  - `P3` = phase 3
+  - `SRQ` = scrub resume queue
+  - `RLS` = release APK build
+- Notes:
+  - pressing `Play` while timeline scrub completion is still settling now queues
+    the resume request instead of effectively requiring the user to wait for a
+    later separate play round-trip
+  - this specifically targets the delayed first play tap after scrub or seam
+    crossing while keeping the same Phase 3 runtime path underneath
+  - `flutter analyze --no-version-check` passed
+  - `flutter test --no-version-check test/widget_test.dart --reporter expanded` passed
+  - `./gradlew --no-daemon app:compileDebugKotlin` passed
+  - `flutter --no-version-check build apk --release` passed
+
 ### Beta 7 Source Snapshot
 
 - Source milestone:
